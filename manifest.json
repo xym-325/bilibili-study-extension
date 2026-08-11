@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+
+  "name": "B站综合插件",
+  "version": "0.1.0",
+  "description": "面向学习场景的 Bilibili 综合辅助浏览器插件。",
+
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "src/ui/popup/index.html",
+    "default_title": "B站综合插件"
+  },
+
+  "options_page": "src/ui/options/index.html",
+
+  "permissions": [
+    "storage"
+  ],
+
+  "host_permissions": [
+    "https://www.bilibili.com/*",
+    "https://live.bilibili.com/*"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/*",
+        "https://live.bilibili.com/*"
+      ],
+      "js": [
+        "src/content/index.ts"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
