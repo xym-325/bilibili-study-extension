@@ -4,18 +4,20 @@
   "private": true,
   "type": "module",
   "description": "B站综合插件",
-
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build && node scripts/smoke-test.mjs",
+    "check": "npm run format:check && npm test",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
-
   "dependencies": {
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
-
   "devDependencies": {
     "@crxjs/vite-plugin": "2.7.1",
     "@types/chrome": "0.2.2",
@@ -24,9 +26,9 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
     "typescript": "7.0.2",
-    "vite": "8.1.5"
+    "vite": "8.1.5",
+    "prettier": "^3.9.6"
   },
-
   "engines": {
     "node": ">=20.19.0"
   }

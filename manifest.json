@@ -17,25 +17,15 @@
 
   "options_page": "src/ui/options/index.html",
 
-  "permissions": [
-    "storage"
-  ],
+  "permissions": ["storage", "alarms", "tabs", "idle"],
 
-  "host_permissions": [
-    "https://www.bilibili.com/*",
-    "https://live.bilibili.com/*"
-  ],
+  "host_permissions": ["https://*.bilibili.com/*"],
 
   "content_scripts": [
     {
-      "matches": [
-        "https://www.bilibili.com/*",
-        "https://live.bilibili.com/*"
-      ],
-      "js": [
-        "src/content/index.ts"
-      ],
-      "run_at": "document_idle"
+      "matches": ["https://*.bilibili.com/*"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_start"
     }
   ]
 }

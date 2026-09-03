@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [
     react(),
     crx({
-      manifest
-    })
+      manifest,
+    }),
   ],
 
   build: {
@@ -18,16 +18,14 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: "src/ui/popup/index.html",
-        options: "src/ui/options/index.html"
-      }
-    }
+        options: "src/ui/options/index.html",
+      },
+    },
   },
 
   server: {
     cors: {
-      origin: [
-        /chrome-extension:\/\//
-      ]
-    }
-  }
+      origin: [/chrome-extension:\/\//],
+    },
+  },
 });

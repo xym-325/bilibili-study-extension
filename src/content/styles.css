@@ -1,0 +1,64 @@
+#bse-player-toolbar {
+  position: fixed;
+  z-index: 2147483646;
+  top: 40%;
+  right: 12px;
+  width: 108px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  background: #fffffff2;
+  box-shadow: 0 8px 28px #0002;
+  color: #18191c;
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+  display: grid;
+  gap: 7px;
+}
+#bse-player-toolbar strong,
+.bse-timer {
+  text-align: center;
+  color: #fb7299;
+}
+#bse-player-toolbar button,
+.bse-reveal-comment {
+  border: 0;
+  border-radius: 7px;
+  padding: 7px;
+  background: #f1f2f3;
+  cursor: pointer;
+}
+#bse-player-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.bse-status {
+  min-height: 18px;
+  text-align: center;
+  color: #61666d;
+}
+.bse-filtered-comment > :not(.bse-reveal-comment) {
+  display: none !important;
+}
+.bse-filtered-comment-revealed > :not(.bse-reveal-comment) {
+  display: revert !important;
+}
+html.bse-learning-redirecting body {
+  visibility: hidden !important;
+}
+html.bse-learning-active .bili-header,
+html.bse-learning-active #commentapp,
+html.bse-learning-active .comment-container,
+html.bse-learning-active .recommend-list-v1,
+html.bse-learning-active .rec-list,
+html.bse-learning-active .bpx-player-ending-panel,
+html.bse-learning-active [class*="ending-panel"],
+html.bse-learning-active [class*="recommend-list"] {
+  display: none !important;
+}
+html.bse-learning-danmaku-hidden .bili-danmaku-x-dm,
+html.bse-learning-danmaku-hidden .b-danmaku,
+html.bse-learning-danmaku-hidden [class*="danmaku-screen"] {
+  visibility: hidden !important;
+}
