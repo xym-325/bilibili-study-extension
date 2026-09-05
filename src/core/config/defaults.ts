@@ -5,9 +5,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   onboardingComplete: false,
   features: {
     "interface-optimization": false,
-    "watch-time": false,
+    "watch-time": true,
     "learning-mode": false,
-    "watch-queue": false,
+    "watch-queue": true,
     "player-tools": false,
     "content-filter": false,
     "learning-library": false,
@@ -16,6 +16,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     hideAds: true,
     hideLiveCards: true,
     hiddenBadges: [],
+    matchMode: "any",
+    hiddenTypes: [],
+    hideMarketing: false,
+    exceptions: [],
   },
   watchTime: {
     dwellSeconds: 10,
@@ -40,7 +44,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       saveSegment: "Alt+KeyS",
     },
   },
-  contentFilter: { keywords: [], mode: "any" },
+  contentFilter: { keywords: [] },
 };
 
 export const STORAGE_KEYS = {

@@ -7,6 +7,10 @@ export interface AppSettings {
     hideAds: boolean;
     hideLiveCards: boolean;
     hiddenBadges: string[];
+    matchMode: "any" | "all";
+    hiddenTypes: string[];
+    hideMarketing: boolean;
+    exceptions: string[];
   };
   watchTime: {
     dwellSeconds: number;
@@ -31,7 +35,7 @@ export interface AppSettings {
       saveSegment: string;
     };
   };
-  contentFilter: { keywords: string[]; mode: "any" | "all" };
+  contentFilter: { keywords: string[] };
 }
 export type SettingsPatch = {
   [K in keyof AppSettings]?: AppSettings[K] extends Record<string, unknown>

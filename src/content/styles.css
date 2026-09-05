@@ -16,6 +16,12 @@
   display: grid;
   gap: 7px;
 }
+.bse-card-hidden {
+  display: none !important;
+}
+#bse-player-toolbar [hidden] {
+  display: none !important;
+}
 #bse-player-toolbar strong,
 .bse-timer {
   text-align: center;

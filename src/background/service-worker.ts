@@ -1,3 +1,6 @@
+import { applyUsageTick } from "../core/usage/record";
+import { learningLocked, refreshLearning } from "../core/learning/session";
+import { CONTENT_TYPES, normalizeKeywords } from "../core/filter/rules";
 import {
   DEFAULT_SETTINGS,
   MAINTENANCE_ALARM,
@@ -71,6 +74,17 @@ function mergeSettings(
     } else if (value !== undefined) Object.assign(next, { [key]: value });
   }
   next.schemaVersion = 2;
+  next.features["watch-queue"] = true;
+  next.interfaceOptimization.hiddenBadges = normalizeKeywords(
+    next.interfaceOptimization.hiddenBadges,
+  );
+  next.interfaceOptimization.hiddenTypes =
+    next.interfaceOptimization.hiddenTypes.filter((type) =>
+      CONTENT_TYPES.some((t) => t === type),
+    );
+  next.interfaceOptimization.exceptions = [
+    ...new Set(next.interfaceOptimization.exceptions),
+  ].slice(-1000);
   next.playerTools.shortcuts = {
     ...DEFAULT_SETTINGS.playerTools.shortcuts,
     ...next.playerTools.shortcuts,
@@ -105,8 +119,7 @@ async function guardDestructive(): Promise<void> {
     STORAGE_KEYS.learningSession,
     null,
   );
-  if (active?.active && !active.completed)
-    throw new Error("学习时间结束前只允许导出备份");
+  if (learningLocked(active)) throw new Error("学习时间结束前只允许导出备份");
 }
 async function updateBadge(): Promise<void> {
   const queue = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
@@ -178,8 +191,6 @@ function migrateLegacyQueue(value: unknown): QueueItem[] {
           id: String(item.id ?? makeId("queue")),
           url: String(item.url ?? ""),
           title: String(item.title ?? "未命名视频"),
-          coverUrl:
-            typeof item.coverUrl === "string" ? item.coverUrl : undefined,
           status:
             item.status === "this-week" || item.status === "watching"
               ? "soon"
@@ -191,75 +202,6 @@ function migrateLegacyQueue(value: unknown): QueueItem[] {
           extensionCount: Number(item.extensionCount) || 0,
         }) as QueueItem,
     );
-}
-
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&quot;/g, '"')
-    .replace(/&#34;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'");
-}
-
-function pickMeta(html: string, key: string): string | undefined {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(
-      `<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
-      "i",
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["'][^>]*>`,
-      "i",
-    ),
-    new RegExp(
-      `<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
-      "i",
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["'][^>]*>`,
-      "i",
-    ),
-  ];
-  return patterns
-    .map((pattern) => pattern.exec(html)?.[1])
-    .find((value): value is string => Boolean(value));
-}
-
-function cleanTitle(value: string): string {
-  return decodeHtml(value)
-    .replace(/_\u54d4\u54e9\u54d4\u54e9_bilibili$/i, "")
-    .replace(/- \u54d4\u54e9\u54d4\u54e9.*$/i, "")
-    .trim();
-}
-
-async function fetchQueueMetadata(
-  item: Pick<QueueItem, "url" | "title" | "uploader" | "coverUrl">,
-): Promise<Partial<QueueItem>> {
-  try {
-    const response = await fetch(item.url, { credentials: "omit" });
-    if (!response.ok) return {};
-    const html = await response.text();
-    const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1];
-    const title =
-      pickMeta(html, "og:title") ??
-      (titleMatch ? cleanTitle(titleMatch) : undefined);
-    const description = pickMeta(html, "description");
-    const uploader =
-      /UP主[:：]\s*([^，。,]+)/
-        .exec(decodeHtml(description ?? ""))?.[1]
-        ?.trim() ?? item.uploader;
-    const coverUrl = pickMeta(html, "og:image") ?? item.coverUrl;
-    return {
-      title: title ? cleanTitle(title) : item.title,
-      uploader,
-      coverUrl: coverUrl?.startsWith("//") ? `https:${coverUrl}` : coverUrl,
-    };
-  } catch {
-    return {};
-  }
 }
 function migrateLegacyBookmarks(value: unknown): ClipBookmark[] {
   if (!Array.isArray(value)) return [];
@@ -388,58 +330,17 @@ async function recordUsage(
   if (systemState === "locked") return;
   const safe = Math.max(0, Math.min(300, Math.round(seconds)));
   if (!safe) return;
-  let effectiveSeconds = safe;
-  let activeSession: LearningSession | null = null;
-  if (study) {
-    activeSession = await getStored<LearningSession | null>(
-      STORAGE_KEYS.learningSession,
-      null,
-    );
-    if (!activeSession?.active || activeSession.completed) return;
-    const available = Math.max(
-      0,
-      Math.floor((Date.now() - activeSession.lastCountedAt) / 1000),
-    );
-    effectiveSeconds = Math.min(safe, available);
-    if (!effectiveSeconds) return;
-  }
+  const effectiveSeconds = safe;
   const config = await settings();
   if (config.features["watch-time"]) {
     const usage = await getStored<UsageStore>(STORAGE_KEYS.usage, emptyUsage());
-    const date = localDate(at);
-    const monthKey = localMonth(at);
-    const hour = new Date(at).getHours();
-    const day = usage.days[date] ?? emptyDay(date);
-    const bucket = day.hours[hour] ?? emptyBucket();
-    bucket.totalSeconds += effectiveSeconds;
-    if (study) bucket.studySeconds += effectiveSeconds;
-    if (live) bucket.liveSeconds += effectiveSeconds;
-    day.hours[hour] = bucket;
-    usage.days[date] = day;
-    const month =
-      usage.months[monthKey] ??
-      ({ month: monthKey, ...emptyBucket() } satisfies MonthlyUsageRecord);
-    month.totalSeconds += effectiveSeconds;
-    if (study) month.studySeconds += effectiveSeconds;
-    if (live) month.liveSeconds += effectiveSeconds;
-    usage.months[monthKey] = month;
-    await setStored(STORAGE_KEYS.usage, usage);
-  }
-  if (study && activeSession) {
-    const now = Date.now();
-    activeSession.elapsedSeconds = Math.min(
-      activeSession.targetSeconds,
-      activeSession.elapsedSeconds + effectiveSeconds,
-    );
-    activeSession.lastCountedAt = now;
-    activeSession.completed =
-      activeSession.elapsedSeconds >= activeSession.targetSeconds;
-    activeSession.updatedAt = now;
-    await setStored(STORAGE_KEYS.learningSession, activeSession);
-    await broadcast({
-      type: "LEARNING_SESSION_CHANGED",
-      session: activeSession,
+    applyUsageTick(usage, {
+      seconds: effectiveSeconds,
+      recordedAt: at,
+      study,
+      live,
     });
+    await setStored(STORAGE_KEYS.usage, usage);
   }
 }
 function enqueueUsage(
@@ -468,7 +369,7 @@ async function usageSummary(): Promise<UsageSummary> {
   const usage = await getStored<UsageStore>(STORAGE_KEYS.usage, emptyUsage());
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (start.getDay() || 7) + 1);
+  start.setDate(start.getDate() - 6);
   const currentWeek = Array.from({ length: 7 }, (_, i) => {
     const date = new Date(start);
     date.setDate(date.getDate() + i);
@@ -489,8 +390,97 @@ async function usageSummary(): Promise<UsageSummary> {
   };
 }
 
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, code: string) =>
+      String.fromCodePoint(Number(code)),
+    )
+    .trim();
+}
+function attribute(tag: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = tag.match(
+    new RegExp(`${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i"),
+  );
+  return decodeHtml(match?.[1] ?? match?.[2] ?? "") || undefined;
+}
+function metaContent(html: string, key: string): string | undefined {
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    if (attribute(tag, "property") === key || attribute(tag, "name") === key)
+      return attribute(tag, "content");
+  }
+  return undefined;
+}
+function safeCoverUrl(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value.startsWith("//") ? `https:${value}` : value);
+    if (url.protocol !== "https:") return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+async function fetchQueueMetadata(
+  input: Pick<QueueItem, "url" | "title" | "uploader" | "coverUrl">,
+): Promise<Pick<QueueItem, "title" | "uploader" | "coverUrl">> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const response = await fetch(input.url, {
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`页面返回 ${response.status}`);
+    const html = await response.text();
+    const rawTitle =
+      metaContent(html, "og:title") ??
+      decodeHtml(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "");
+    const title = rawTitle
+      .replace(/[_\-—|]\s*哔哩哔哩.*$/i, "")
+      .replace(/_bilibili.*$/i, "")
+      .trim();
+    return {
+      title:
+        title &&
+        !/(验证|安全检查|访问受限|出错啦|页面不存在|浏览器版本过低)/.test(title)
+          ? title
+          : input.title,
+      uploader:
+        metaContent(html, "author") ??
+        metaContent(html, "og:video:actor") ??
+        input.uploader,
+      coverUrl: safeCoverUrl(metaContent(html, "og:image") ?? input.coverUrl),
+    };
+  } catch {
+    return {
+      title:
+        input.title === parseBvid(input.url) ||
+        input.title === parseCheeseEpisodeId(input.url)
+          ? "视频信息暂未获取，点击更新信息重试"
+          : input.title,
+      uploader: input.uploader,
+      coverUrl: safeCoverUrl(input.coverUrl),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function addQueue(input: AddQueueInput): Promise<QueueItem> {
   const parsed = new URL(input.url);
+  input = {
+    ...input,
+    bvid: parseBvid(input.url),
+    cheeseEpisodeId: parseCheeseEpisodeId(input.url),
+  };
   if (
     parsed.protocol !== "https:" ||
     !(
@@ -506,36 +496,69 @@ async function addQueue(input: AddQueueInput): Promise<QueueItem> {
       (input.bvid && item.bvid === input.bvid) ||
       (input.cheeseEpisodeId && item.cheeseEpisodeId === input.cheeseEpisodeId),
   );
-  if (duplicate) return duplicate;
+  if (duplicate) {
+    if (
+      duplicate.coverUrl &&
+      duplicate.metadataFetchedAt &&
+      Date.now() - duplicate.metadataFetchedAt < 86400000
+    )
+      return duplicate;
+    const metadata =
+      input.coverUrl && input.title !== input.bvid
+        ? input
+        : await fetchQueueMetadata(duplicate);
+    Object.assign(
+      duplicate,
+      {
+        title: metadata.title,
+        uploader: metadata.uploader,
+        coverUrl: metadata.coverUrl,
+      },
+      {
+        metadataFetchedAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    );
+    await setStored(STORAGE_KEYS.queue, queue);
+    return duplicate;
+  }
   const config = await settings();
   const now = Date.now();
   const days =
     input.status === "soon" ? config.queue.soonDays : config.queue.laterDays;
+  const metadata =
+    input.coverUrl && input.title !== input.bvid
+      ? {
+          title: input.title,
+          uploader: input.uploader,
+          coverUrl: safeCoverUrl(input.coverUrl),
+        }
+      : await fetchQueueMetadata(input);
   const item: QueueItem = {
     ...input,
-    ...(await fetchQueueMetadata(input)),
+    ...metadata,
     id: makeId("queue"),
     addedAt: now,
     updatedAt: now,
     dueAt: input.dueAt ?? now + days * 86_400_000,
     extensionCount: 0,
+    metadataFetchedAt: now,
   };
   queue.push(item);
   await setStored(STORAGE_KEYS.queue, queue);
   return item;
 }
-
-async function refreshQueueItem(id: string): Promise<QueueItem> {
-  const q = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
-  const i = q.findIndex((item) => item.id === id);
-  if (i < 0) throw new Error("未找到队列项目");
-  q[i] = {
-    ...q[i],
-    ...(await fetchQueueMetadata(q[i])),
+async function refreshQueueMetadata(id: string): Promise<QueueItem> {
+  const queue = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
+  const item = queue.find((entry) => entry.id === id);
+  if (!item) throw new Error("未找到队列项目");
+  const metadata = await fetchQueueMetadata(item);
+  Object.assign(item, metadata, {
+    metadataFetchedAt: Date.now(),
     updatedAt: Date.now(),
-  };
-  await setStored(STORAGE_KEYS.queue, q);
-  return q[i];
+  });
+  await setStored(STORAGE_KEYS.queue, queue);
+  return item;
 }
 async function addBookmark(input: AddBookmarkInput): Promise<ClipBookmark> {
   const items = await getStored<ClipBookmark[]>(STORAGE_KEYS.bookmarks, []);
@@ -673,8 +696,56 @@ async function clearSection(section: ClearableDataSection): Promise<void> {
   await broadcast({ type: "DATA_CHANGED" });
 }
 
+const LEARNING_END_ALARM = "bse.learning-end";
+async function currentLearning(): Promise<LearningSession | null> {
+  const stored = await getStored<LearningSession | null>(
+    STORAGE_KEYS.learningSession,
+    null,
+  );
+  const next = refreshLearning(stored);
+  if (stored && next && stored.completed !== next.completed) {
+    await setStored(STORAGE_KEYS.learningSession, next);
+    await broadcast({ type: "LEARNING_SESSION_CHANGED", session: next });
+  }
+  return next;
+}
+async function filterTab(id: number) {
+  const tabs = await chrome.tabs.query({ url: "https://*.bilibili.com/*" });
+  if (!tabs.some((tab) => tab.id === id))
+    throw new Error("该B站页面已关闭或缺少访问权限");
+}
 async function handle(message: ExtensionMessage): Promise<unknown> {
   switch (message.type) {
+    case "GET_FILTER_PAGES": {
+      const tabs = await chrome.tabs.query({ url: "https://*.bilibili.com/*" });
+      return tabs
+        .filter((tab) => tab.id !== undefined)
+        .map((tab) => ({
+          id: tab.id!,
+          title: tab.title ?? "B站页面",
+          url: tab.url ?? "",
+        }));
+    }
+    case "GET_FILTER_REPORT":
+      await filterTab(message.tabId);
+      try {
+        return await chrome.tabs.sendMessage(message.tabId, {
+          type: "CONTENT_FILTER_REPORT",
+        });
+      } catch {
+        throw new Error(
+          "页面脚本未连接。请确认网站访问权限，并刷新这个B站页面后重试。",
+        );
+      }
+    case "RESTORE_FILTER_CARD": {
+      await filterTab(message.tabId);
+      const config = await settings();
+      if (!message.key || message.key.length > 2048)
+        throw new Error("无效的视频标识");
+      config.interfaceOptimization.exceptions.push(message.key);
+      await saveSettings(mergeSettings(config, {}));
+      return { restored: true };
+    }
     case "GET_SETTINGS":
       return settings();
     case "PATCH_SETTINGS":
@@ -714,8 +785,8 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
       await updateBadge();
       return q[i];
     }
-    case "REFRESH_QUEUE_ITEM":
-      return refreshQueueItem(message.id);
+    case "REFRESH_QUEUE_METADATA":
+      return refreshQueueMetadata(message.id);
     case "DELETE_QUEUE_ITEM": {
       const q = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
       const n = q.filter((item) => item.id !== message.id);
@@ -807,27 +878,26 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
       return { reset: true };
     }
     case "GET_LEARNING_SESSION":
-      return getStored<LearningSession | null>(
-        STORAGE_KEYS.learningSession,
-        null,
-      );
+      return currentLearning();
     case "START_LEARNING_SESSION": {
-      const config = await settings();
-      if (!config.features["learning-mode"])
-        throw new Error("请先开启学习模式");
-      if (message.durationMinutes < 10 || message.durationMinutes > 360)
+      if (
+        !Number.isFinite(message.durationMinutes) ||
+        message.durationMinutes < 10 ||
+        message.durationMinutes > 360
+      )
         throw new Error("学习时长必须在10分钟至6小时之间");
       const existing = await getStored<LearningSession | null>(
         STORAGE_KEYS.learningSession,
         null,
       );
-      if (existing?.active && !existing.completed)
+      if (learningLocked(existing))
         throw new Error("已有未完成的学习会话，不能重新设置");
       const queue = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
       const selected = queue.filter((item) =>
         message.queueItemIds.includes(item.id),
       );
-      if (!selected.length) throw new Error("请至少选择一个学习视频");
+      if (selected.length !== 1)
+        throw new Error("请选择一个视频；该视频的所有分P均可观看");
       const now = Date.now();
       const session: LearningSession = {
         id: makeId("learning"),
@@ -848,6 +918,9 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
         updatedAt: now,
       };
       await setStored(STORAGE_KEYS.learningSession, session);
+      await chrome.alarms.create(LEARNING_END_ALARM, {
+        when: now + session.targetSeconds * 1000,
+      });
       await broadcast({ type: "LEARNING_SESSION_CHANGED", session });
       return session;
     }
@@ -856,7 +929,7 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
         STORAGE_KEYS.learningSession,
         null,
       );
-      if (s?.active && !s.completed) throw new Error("学习时间结束前不能退出");
+      if (learningLocked(s)) throw new Error("学习时间结束前不能退出");
       await setStored(STORAGE_KEYS.learningSession, null);
       await broadcast({ type: "LEARNING_SESSION_CHANGED", session: null });
       return null;
@@ -866,7 +939,7 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
         STORAGE_KEYS.learningSession,
         null,
       );
-      if (s?.active) {
+      if (s?.active && learningLocked(s)) {
         const bvid = parseBvid(message.url);
         const episode = parseCheeseEpisodeId(message.url);
         const inWhitelist = s.allowedVideos.some(
@@ -874,7 +947,7 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
             (bvid && item.bvid === bvid) ||
             (episode && item.cheeseEpisodeId === episode),
         );
-        if (inWhitelist) {
+        if (inWhitelist && s.lastLearningUrl !== message.url) {
           s.lastLearningUrl = message.url;
           s.updatedAt = Date.now();
           await setStored(STORAGE_KEYS.learningSession, s);
@@ -933,9 +1006,28 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
       return { cleared: true };
   }
 }
+let learningMutation: Promise<unknown> = Promise.resolve();
+function dispatch(message: ExtensionMessage): Promise<unknown> {
+  if (
+    [
+      "GET_LEARNING_SESSION",
+      "START_LEARNING_SESSION",
+      "STOP_LEARNING_SESSION",
+      "SET_LEARNING_LAST_URL",
+    ].includes(message.type)
+  ) {
+    learningMutation = learningMutation.then(
+      () => handle(message),
+      () => handle(message),
+    );
+    return learningMutation;
+  }
+  return handle(message);
+}
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, respond) => {
-    void handle(message)
+    void ready
+      .then(() => dispatch(message))
       .then((data) => respond({ ok: true, data }))
       .catch((error: unknown) =>
         respond({
@@ -964,6 +1056,8 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === MAINTENANCE_ALARM) void maintenance();
+  if (alarm.name === LEARNING_END_ALARM)
+    void dispatch({ type: "GET_LEARNING_SESSION" });
 });
 chrome.idle.setDetectionInterval(300);
 chrome.idle.queryState(300).then((state) => {
@@ -972,7 +1066,9 @@ chrome.idle.queryState(300).then((state) => {
 chrome.idle.onStateChanged.addListener((state) => {
   systemState = state;
 });
-void migrateStorage().then(async () => {
+const ready = migrateStorage();
+void ready.then(async () => {
   await ensureAlarm();
+  await currentLearning();
   await maintenance();
 });

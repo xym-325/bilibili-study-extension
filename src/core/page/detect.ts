@@ -41,6 +41,10 @@ export function detectPage(doc: Document = document): PageSnapshot {
           ".up-name,.username,.up-info-container .name",
         )
         ?.innerText.trim() || undefined,
+    coverUrl:
+      doc
+        .querySelector<HTMLMetaElement>('meta[property="og:image"]')
+        ?.content.trim() || undefined,
     detectedAt: Date.now(),
   };
 }

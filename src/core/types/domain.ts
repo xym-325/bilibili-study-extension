@@ -24,6 +24,7 @@ export interface PageSnapshot {
   pageNumber?: number;
   title?: string;
   uploader?: string;
+  coverUrl?: string;
   detectedAt: number;
 }
 export interface PlayerSnapshot {
@@ -45,6 +46,7 @@ export interface QueueItem {
   title: string;
   uploader?: string;
   coverUrl?: string;
+  metadataFetchedAt?: number;
   addedAt: number;
   updatedAt: number;
   status: QueueStatus;
@@ -126,6 +128,7 @@ export interface MonthlyUsageRecord extends UsageBucket {
   month: string;
 }
 export interface UsageStore {
+  lastCounted?: Partial<Record<keyof UsageBucket, number>>;
   days: Record<string, DailyUsageRecord>;
   months: Record<string, MonthlyUsageRecord>;
 }

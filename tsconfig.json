@@ -1,42 +1,19 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-
     "module": "ESNext",
     "moduleResolution": "Bundler",
-
     "jsx": "react-jsx",
-
     "strict": true,
     "noEmit": true,
-
     "isolatedModules": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-
     "resolveJsonModule": true,
     "skipLibCheck": true,
-
     "forceConsistentCasingInFileNames": true,
-
     "types": ["vite/client", "chrome", "node"]
   },
-
-  "include": [
-    "src/background/index.ts",
-    "src/content/index.ts",
-    "src/core/config/defaults.ts",
-    "src/core/message/client.ts",
-    "src/core/page/detect.ts",
-    "src/core/player/find-player.ts",
-    "src/core/storage/chrome-store.ts",
-    "src/core/types/domain.ts",
-    "src/core/types/messages.ts",
-    "src/core/types/settings.ts",
-    "src/ui/options/main.tsx",
-    "src/ui/popup/main.tsx",
-    "vite.config.ts"
-  ]
+  "include": ["src", "vite.config.ts"]
 }

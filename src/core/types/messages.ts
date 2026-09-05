@@ -1,3 +1,4 @@
+import type { FilterReport } from "../filter/rules";
 import type {
   AppDataExport,
   AppNotice,
@@ -22,6 +23,9 @@ export type AddBookmarkInput = Omit<
   "id" | "createdAt" | "updatedAt"
 >;
 export type ExtensionMessage =
+  | { type: "GET_FILTER_PAGES" }
+  | { type: "GET_FILTER_REPORT"; tabId: number }
+  | { type: "RESTORE_FILTER_CARD"; tabId: number; key: string }
   | { type: "GET_SETTINGS" }
   | { type: "PATCH_SETTINGS"; patch: SettingsPatch }
   | { type: "RESET_SETTINGS" }
@@ -30,7 +34,7 @@ export type ExtensionMessage =
   | { type: "LIST_QUEUE"; status?: QueueStatus }
   | { type: "ADD_QUEUE_ITEM"; item: AddQueueInput }
   | { type: "UPDATE_QUEUE_ITEM"; id: string; patch: Partial<QueueItem> }
-  | { type: "REFRESH_QUEUE_ITEM"; id: string }
+  | { type: "REFRESH_QUEUE_METADATA"; id: string }
   | { type: "DELETE_QUEUE_ITEM"; id: string }
   | { type: "LIST_BOOKMARKS" }
   | { type: "ADD_BOOKMARK"; bookmark: AddBookmarkInput }
@@ -56,6 +60,9 @@ export type ExtensionMessage =
   | { type: "CLEAR_DATA_SECTION"; section: ClearableDataSection }
   | { type: "CLEAR_ALL_DATA" };
 export interface MessageResponseMap {
+  GET_FILTER_PAGES: { id: number; title: string; url: string }[];
+  GET_FILTER_REPORT: FilterReport;
+  RESTORE_FILTER_CARD: { restored: true };
   GET_SETTINGS: AppSettings;
   PATCH_SETTINGS: AppSettings;
   RESET_SETTINGS: AppSettings;
@@ -64,7 +71,7 @@ export interface MessageResponseMap {
   LIST_QUEUE: QueueItem[];
   ADD_QUEUE_ITEM: QueueItem;
   UPDATE_QUEUE_ITEM: QueueItem;
-  REFRESH_QUEUE_ITEM: QueueItem;
+  REFRESH_QUEUE_METADATA: QueueItem;
   DELETE_QUEUE_ITEM: { deleted: boolean };
   LIST_BOOKMARKS: ClipBookmark[];
   ADD_BOOKMARK: ClipBookmark;

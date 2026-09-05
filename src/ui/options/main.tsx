@@ -1,3 +1,6 @@
+import { FilterSettings } from "./FilterSettings";
+import { learningRemaining, learningLocked } from "../../core/learning/session";
+import { checkSiteAccess } from "../permissions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { sendMessage } from "../../core/message/client";
@@ -17,7 +20,14 @@ import type {
 import type { AppSettings } from "../../core/types/settings";
 import "../shared.css";
 
-type View = "features" | "stats" | "queue" | "learning" | "library" | "data";
+type View =
+  | "optimization"
+  | "features"
+  | "stats"
+  | "queue"
+  | "learning"
+  | "library"
+  | "data";
 const features: Record<FeatureId, string> = {
   "interface-optimization": "界面优化",
   "watch-time": "观看时长",
@@ -29,7 +39,7 @@ const features: Record<FeatureId, string> = {
 };
 const statusLabels: Record<QueueStatus, string> = {
   later: "稍后看",
-  soon: "近期学习",
+  soon: "近期观看",
   "needs-review": "待处理",
   completed: "已完成",
 };
@@ -42,6 +52,7 @@ const sectionLabels: Record<ClearableDataSection, string> = {
   settings: "功能设置",
 };
 const duration = (seconds: number) => {
+  if (seconds < 60) return `${Math.max(0, Math.floor(seconds))}秒`;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return h ? `${h}小时${m}分` : `${m}分钟`;
@@ -93,47 +104,96 @@ function Options(): React.JSX.Element {
   const [selected, setSelected] = useState<string[]>([]);
   const [minutes, setMinutes] = useState(60);
   const [newUrl, setNewUrl] = useState("");
+  const [addingQueue, setAddingQueue] = useState(false);
+  const [contentRuleDraft, setContentRuleDraft] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryTag, setLibraryTag] = useState("");
   const [notice, setNotice] = useState("");
-  const [hiddenBadgesDraft, setHiddenBadgesDraft] = useState("");
-  const [keywordsDraft, setKeywordsDraft] = useState("");
-  const [filterModeDraft, setFilterModeDraft] = useState<"any" | "all">("any");
-  const [statsDay, setStatsDay] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [pendingImport, setPendingImport] = useState<AppDataExport | null>(
     null,
   );
   const inputRef = useRef<HTMLInputElement>(null);
   async function load() {
-    const [a, b, c, d, e, f] = await Promise.all([
+    setLoadError("");
+    const [a, b] = await Promise.all([
       sendMessage({ type: "GET_SETTINGS" }),
       sendMessage({ type: "GET_USAGE_SUMMARY" }),
+    ]);
+    setSettings(a);
+    setContentRuleDraft(a.contentFilter.keywords.join("\n"));
+    setUsage(b);
+    const [c, d, e, f] = await Promise.all([
       sendMessage({ type: "LIST_QUEUE" }),
       sendMessage({ type: "LIST_BOOKMARKS" }),
       sendMessage({ type: "LIST_PROGRESS" }),
       sendMessage({ type: "GET_LEARNING_SESSION" }),
     ]);
-    setSettings(a);
-    setUsage(b);
     setQueue(c);
     setBookmarks(d);
     setProgress(e);
     setSession(f);
   }
   useEffect(() => {
-    void load().catch(showError);
+    void load().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "插件后台未响应";
+      setLoadError(message);
+      setNotice(message);
+    });
   }, []);
   useEffect(() => {
-    if (!settings) return;
-    setHiddenBadgesDraft(settings.interfaceOptimization.hiddenBadges.join(","));
-    setKeywordsDraft(settings.contentFilter.keywords.join("\n"));
-    setFilterModeDraft(settings.contentFilter.mode);
-  }, [settings]);
+    if (view !== "stats") return;
+    let mounted = true;
+    const refreshUsage = () =>
+      void sendMessage({ type: "GET_USAGE_SUMMARY" })
+        .then((next) => {
+          if (mounted) setUsage(next);
+        })
+        .catch((error: unknown) => {
+          if (mounted) showError(error);
+        });
+    refreshUsage();
+    const timer = window.setInterval(refreshUsage, 5000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [view]);
+  const [, tickClock] = useState(0);
+  useEffect(() => {
+    if (view !== "learning") return;
+    let alive = true;
+    const update = () =>
+      void sendMessage({ type: "GET_LEARNING_SESSION" })
+        .then((value) => {
+          if (alive) setSession(value);
+        })
+        .catch(showError);
+    update();
+    const timer = window.setInterval(() => {
+      tickClock((v) => v + 1);
+    }, 1000);
+    const poll = window.setInterval(update, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      clearInterval(poll);
+    };
+  }, [view]);
+  useEffect(() => {
+    void checkSiteAccess(setNotice, false).catch(showError);
+  }, []);
   const showError = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : "操作失败");
   async function patch(
     value: Parameters<typeof sendMessage<"PATCH_SETTINGS">>[0]["patch"],
   ) {
+    if (
+      value.features &&
+      Object.values(value.features).some(Boolean) &&
+      !(await checkSiteAccess(setNotice, true))
+    )
+      return;
     const next = await sendMessage({ type: "PATCH_SETTINGS", patch: value });
     setSettings(next);
   }
@@ -151,6 +211,18 @@ function Options(): React.JSX.Element {
     await patch({
       features: { ...settings.features, [id]: !settings.features[id] },
     });
+  }
+  async function saveFilterRules() {
+    if (!settings) return;
+    const contentRules = contentRuleDraft
+      .split(/\n+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    await patch({
+      contentFilter: { keywords: contentRules },
+    });
+    setContentRuleDraft(contentRules.join("\n"));
+    setNotice("过滤规则已保存并重新应用");
   }
   async function updateQueue(id: string, value: Partial<QueueItem>) {
     await sendMessage({ type: "UPDATE_QUEUE_ITEM", id, patch: value });
@@ -176,7 +248,11 @@ function Options(): React.JSX.Element {
     await load();
   }
   async function addUrl() {
-    const url = newUrl.trim();
+    if (!(await checkSiteAccess(setNotice, true))) return;
+    const raw = newUrl.trim();
+    const url = /^BV[0-9a-z]+$/i.test(raw)
+      ? `https://www.bilibili.com/video/${raw}`
+      : raw;
     const bvid = parseBvid(url);
     const ep = parseCheeseEpisodeId(url);
     let hostname = "";
@@ -191,39 +267,26 @@ function Options(): React.JSX.Element {
       (!bvid && !ep)
     )
       throw new Error("请粘贴普通BV视频或B站课堂链接");
-    await sendMessage({
-      type: "ADD_QUEUE_ITEM",
-      item: {
-        bvid,
-        cheeseEpisodeId: ep,
-        url,
-        title: bvid ?? ep ?? "待识别视频",
-        status: "later",
-      },
-    });
-    setNewUrl("");
-    await load();
-  }
-  async function saveRules() {
-    await patch({
-      interfaceOptimization: {
-        ...settings!.interfaceOptimization,
-        hiddenBadges: hiddenBadgesDraft
-          .split(/[,，\n]/)
-          .map((x) => x.trim())
-          .filter(Boolean),
-      },
-      contentFilter: {
-        keywords: keywordsDraft
-          .split(/\n/)
-          .map((x) => x.trim())
-          .filter(Boolean),
-        mode: filterModeDraft,
-      },
-    });
-    setNotice("规则已保存并应用到已打开的B站页面");
+    setAddingQueue(true);
+    try {
+      await sendMessage({
+        type: "ADD_QUEUE_ITEM",
+        item: {
+          bvid,
+          cheeseEpisodeId: ep,
+          url,
+          title: bvid ?? ep ?? "待识别视频",
+          status: "later",
+        },
+      });
+      setNewUrl("");
+      await load();
+    } finally {
+      setAddingQueue(false);
+    }
   }
   async function beginLearning() {
+    if (!(await checkSiteAccess(setNotice, true))) return;
     if (
       !confirm(
         `二次确认：开始${minutes}分钟学习，期间不能修改视频、时长或提前退出？`,
@@ -282,10 +345,8 @@ function Options(): React.JSX.Element {
     await sendMessage({ type: "CLEAR_ALL_DATA" });
     await load();
   }
-  const locked = Boolean(session?.active && !session.completed);
-  const remaining = session
-    ? Math.max(0, session.targetSeconds - session.elapsedSeconds)
-    : 0;
+  const locked = learningLocked(session);
+  const remaining = learningRemaining(session);
   const soon = queue.filter((x) => x.status === "soon");
   const soonMinutes = soon.reduce(
     (n, x) => n + (x.durationSeconds ?? 0) / 60,
@@ -320,7 +381,21 @@ function Options(): React.JSX.Element {
     );
   }, [bookmarks, libraryQuery, libraryTag]);
   if (!settings || !usage)
-    return <main className="loading-card">正在加载插件数据…</main>;
+    return (
+      <main className="loading-card">
+        {loadError ? (
+          <>
+            <strong>插件后台启动失败</strong>
+            <p>{loadError}</p>
+            <button className="primary-button" onClick={() => void load()}>
+              重新加载
+            </button>
+          </>
+        ) : (
+          "正在加载插件数据…"
+        )}
+      </main>
+    );
   return (
     <main className="options-layout">
       <aside className="sidebar">
@@ -335,6 +410,7 @@ function Options(): React.JSX.Element {
           {(
             [
               ["features", "功能设置"],
+              ["optimization", "界面优化"],
               ["stats", "观看统计"],
               ["queue", "观看队列"],
               ["learning", "学习模式"],
@@ -351,7 +427,9 @@ function Options(): React.JSX.Element {
             </button>
           ))}
         </nav>
-        <p className="sidebar-note">七项功能默认关闭；无插件账户、无云同步。</p>
+        <p className="sidebar-note">
+          新安装默认统计用时；无插件账户、无云同步。
+        </p>
       </aside>
       <section className="content-area">
         {notice ? (
@@ -364,7 +442,7 @@ function Options(): React.JSX.Element {
           <>
             <Header
               title="功能设置"
-              text="所有功能默认关闭，可以按需单独开启。"
+              text="观看统计在新安装时默认开启；学习模式和观看队列在各自页面使用。"
             />
             {!settings.onboardingComplete ? (
               <section className="onboarding-card">
@@ -383,101 +461,58 @@ function Options(): React.JSX.Element {
               </section>
             ) : null}
             <section className="feature-grid">
-              {Object.entries(features).map(([id, label]) => (
-                <article className="feature-card" key={id}>
-                  <div>
-                    <h2>{label}</h2>
-                    <p>启用后仅在对应B站页面生效。</p>
-                  </div>
-                  <label className="toggle-control">
-                    <input
-                      type="checkbox"
-                      checked={settings.features[id as FeatureId]}
-                      onChange={() => void toggleFeature(id as FeatureId)}
-                    />
-                    <span>
-                      {settings.features[id as FeatureId] ? "已开启" : "已关闭"}
-                    </span>
-                  </label>
-                </article>
-              ))}
+              {Object.entries(features)
+                .filter(
+                  ([id]) =>
+                    ![
+                      "learning-mode",
+                      "watch-queue",
+                      "interface-optimization",
+                    ].includes(id),
+                )
+                .map(([id, label]) => (
+                  <article className="feature-card" key={id}>
+                    <div>
+                      <h2>{label}</h2>
+                      <p>启用后仅在对应B站页面生效。</p>
+                    </div>
+                    <label className="toggle-control">
+                      <input
+                        type="checkbox"
+                        checked={settings.features[id as FeatureId]}
+                        onChange={() => void toggleFeature(id as FeatureId)}
+                      />
+                      <span>
+                        {settings.features[id as FeatureId]
+                          ? "已开启"
+                          : "已关闭"}
+                      </span>
+                    </label>
+                  </article>
+                ))}
             </section>
             <section className="settings-card">
-              <div className="card-heading inline-heading">
-                <h2>界面与过滤规则</h2>
-                <details className="help-popover">
-                  <summary aria-label="查看使用指南">?</summary>
-                  <p>
-                    界面优化处理广告、直播和指定视频类型标签；评论与弹幕过滤只处理评论和弹幕。先开启对应功能，再填写规则，最后点击保存并应用。
-                  </p>
-                </details>
-              </div>
-              <div className="form-grid">
-                <label className="toggle-row">
-                  <span>收起明确广告卡片</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.interfaceOptimization.hideAds}
-                    onChange={(e) =>
-                      void patch({
-                        interfaceOptimization: {
-                          ...settings.interfaceOptimization,
-                          hideAds: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                </label>
-                <label className="toggle-row">
-                  <span>收起直播推荐卡片</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.interfaceOptimization.hideLiveCards}
-                    onChange={(e) =>
-                      void patch({
-                        interfaceOptimization: {
-                          ...settings.interfaceOptimization,
-                          hideLiveCards: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>隐藏视频类型标签（支持中英文逗号或换行）</span>
-                  <input
-                    value={hiddenBadgesDraft}
-                    onChange={(e) => setHiddenBadgesDraft(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>关键词命中方式</span>
-                  <select
-                    value={filterModeDraft}
-                    onChange={(e) =>
-                      setFilterModeDraft(e.target.value as "any" | "all")
-                    }
-                  >
-                    <option value="any">任一满足（析取 OR）</option>
-                    <option value="all">全部满足（合取 AND）</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>不和谐内容关键词（每行一个）</span>
-                  <textarea
-                    value={keywordsDraft}
-                    onChange={(e) => setKeywordsDraft(e.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="settings-actions">
-                <button
-                  className="primary-button"
-                  onClick={() => void saveRules().catch(showError)}
-                >
-                  保存并应用
-                </button>
-              </div>
+              <h2>推荐内容设置</h2>
+              <p>广告、直播、类型角标及营销视频，统一在界面优化中管理。</p>
+              <button onClick={() => setView("optimization")}>
+                打开界面优化
+              </button>
+            </section>
+            <section className="settings-card">
+              <h2>评论与弹幕过滤词</h2>
+              <p>
+                只过滤已加载的评论与弹幕，不读取其他视频评论。与首页标题关键词相互独立。
+              </p>
+              <label className="field">
+                <span>每行一个词</span>
+                <textarea
+                  value={contentRuleDraft}
+                  onChange={(e) => setContentRuleDraft(e.target.value)}
+                />
+              </label>
+              <button onClick={() => void saveFilterRules().catch(showError)}>
+                保存并应用
+              </button>
             </section>
             <section className="settings-card">
               <h2>播放器快捷键</h2>
@@ -519,7 +554,7 @@ function Options(): React.JSX.Element {
           <>
             <Header
               title="观看统计"
-              text="总时长包含学习模式和直播，三项不能相加。"
+              text="本页每5秒刷新；总时长包含学习模式和直播，三项不能相加。"
             />
             <section className="metric-grid">
               <Metric
@@ -536,21 +571,8 @@ function Options(): React.JSX.Element {
               />
             </section>
             <section className="settings-card">
-              <h2>七天日度使用情况</h2>
-              <WeeklyBars
-                days={usage.currentWeek}
-                selected={statsDay}
-                onSelect={setStatsDay}
-              />
-            </section>
-            <section className="settings-card">
-              <h2>每日24小时时段详情</h2>
-              <HourDetails
-                day={
-                  usage.currentWeek.find((day) => day.date === statsDay) ??
-                  usage.currentWeek.at(-1)!
-                }
-              />
+              <h2>近七天使用情况</h2>
+              <UsageCharts days={usage.currentWeek} />
             </section>
             <section className="settings-card">
               <h2>月度累计</h2>
@@ -569,40 +591,66 @@ function Options(): React.JSX.Element {
             </section>
           </>
         ) : null}
+        {view === "optimization" && settings ? (
+          <FilterSettings
+            settings={settings}
+            patch={patch}
+            showError={showError}
+          />
+        ) : null}
         {view === "queue" ? (
           <>
             <Header
               title="观看队列"
-              text="B站收藏负责长期保存，插件队列只负责什么时候看。"
+              text="独立的待观看清单，可放学习或娱乐视频；学习模式只使用你选中的视频。"
             />
             <div className="toolbar">
               <input
-                placeholder="粘贴BV视频或B站课堂链接"
+                placeholder="输入BV号、视频链接或B站课堂链接"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
               />
-              <button onClick={() => void addUrl().catch(showError)}>
-                加入稍后看
+              <button
+                disabled={addingQueue}
+                onClick={() => void addUrl().catch(showError)}
+              >
+                {addingQueue ? "正在获取视频信息…" : "加入稍后看"}
               </button>
             </div>
             {overLimit ? (
-              <p className="alert">近期学习超过5个或3小时，仍可继续添加。</p>
+              <p className="alert">近期观看超过5个或3小时，仍可继续添加。</p>
             ) : null}
             <section className="list-card">
+              {!sortedQueue.length && (
+                <p>还没有待观看视频。粘贴链接加入，或在视频页点击“稍后看”。</p>
+              )}
               {sortedQueue.map((item) => (
-                <article className="data-row" key={item.id}>
-                  <div className="queue-cover">
+                <article className="queue-card" key={item.id}>
+                  <button
+                    className="queue-cover"
+                    onClick={() => window.open(item.url, "_blank")}
+                    aria-label={`打开${item.title}`}
+                  >
                     {item.coverUrl ? (
-                      <img src={item.coverUrl} alt="" loading="lazy" />
+                      <img
+                        src={item.coverUrl}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.hidden = true;
+                        }}
+                      />
                     ) : (
-                      <span>无封面</span>
+                      <span>暂无封面</span>
                     )}
-                  </div>
-                  <div className="data-main">
-                    <span className={`status-tag status-tag--${item.status}`}>
-                      {statusLabels[item.status]}
-                    </span>
-                    <h3>{item.title}</h3>
+                  </button>
+                  <div className="queue-content">
+                    <div className="queue-heading">
+                      <span className={`status-tag status-tag--${item.status}`}>
+                        {statusLabels[item.status]}
+                      </span>
+                      <h3>{item.title}</h3>
+                    </div>
                     <p>
                       {item.uploader ?? "未获取UP主"} · 到期 {date(item.dueAt)}
                       {item.inaccessible ? " · 已标记失效" : ""}
@@ -611,106 +659,107 @@ function Options(): React.JSX.Element {
                     {item.note ? (
                       <p className="note-text">{item.note}</p>
                     ) : null}
-                  </div>
-                  <div className="row-actions">
-                    <button onClick={() => window.open(item.url, "_blank")}>
-                      打开
-                    </button>
-                    <select
-                      value={item.status}
-                      onChange={(e) =>
-                        void updateQueue(item.id, {
-                          status: e.target.value as QueueStatus,
-                        })
-                      }
-                    >
-                      {Object.entries(statusLabels).map(([v, l]) => (
-                        <option key={v} value={v}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="date"
-                      value={
-                        item.dueAt
-                          ? new Date(item.dueAt).toISOString().slice(0, 10)
-                          : ""
-                      }
-                      onChange={(e) =>
-                        void updateQueue(item.id, {
-                          dueAt: new Date(
-                            `${e.target.value}T23:59:59`,
-                          ).getTime(),
-                        })
-                      }
-                    />
-                    <button
-                      onClick={() =>
-                        void sendMessage({
-                          type: "REFRESH_QUEUE_ITEM",
-                          id: item.id,
-                        }).then(load, showError)
-                      }
-                    >
-                      更新信息
-                    </button>
-                    <button
-                      onClick={() =>
-                        void updateQueue(item.id, {
-                          dueAt: Date.now() + 7 * 86_400_000,
-                          extensionCount: item.extensionCount + 1,
-                          status: "soon",
-                        })
-                      }
-                    >
-                      延期7天
-                    </button>
-                    <button
-                      onClick={() =>
-                        void updateQueue(item.id, {
-                          dueAt: Date.now() + 30 * 86_400_000,
-                          extensionCount: item.extensionCount + 1,
-                          status: "later",
-                        })
-                      }
-                    >
-                      延期30天
-                    </button>
-                    <button
-                      onClick={() => {
-                        const note = prompt("队列备注", item.note ?? "");
-                        if (note !== null) void updateQueue(item.id, { note });
-                      }}
-                    >
-                      备注
-                    </button>
-                    <button
-                      onClick={() =>
-                        void updateQueue(item.id, {
-                          inaccessible: !item.inaccessible,
-                        })
-                      }
-                    >
-                      {item.inaccessible ? "恢复可用" : "标记失效"}
-                    </button>
-                    <button onClick={() => void moveQueue(item.id, -1)}>
-                      上移
-                    </button>
-                    <button onClick={() => void moveQueue(item.id, 1)}>
-                      下移
-                    </button>
-                    <button
-                      className="danger-link"
-                      onClick={() =>
-                        void sendMessage({
-                          type: "DELETE_QUEUE_ITEM",
-                          id: item.id,
-                        }).then(load)
-                      }
-                    >
-                      删除队列项
-                    </button>
+                    <div className="queue-controls">
+                      <button onClick={() => window.open(item.url, "_blank")}>
+                        打开视频
+                      </button>
+                      <button
+                        onClick={() =>
+                          void sendMessage({
+                            type: "REFRESH_QUEUE_METADATA",
+                            id: item.id,
+                          }).then(load)
+                        }
+                      >
+                        更新信息
+                      </button>
+                      <select
+                        value={item.status}
+                        onChange={(e) =>
+                          void updateQueue(item.id, {
+                            status: e.target.value as QueueStatus,
+                          })
+                        }
+                      >
+                        {Object.entries(statusLabels).map(([v, l]) => (
+                          <option key={v} value={v}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="date"
+                        value={
+                          item.dueAt
+                            ? new Date(item.dueAt).toISOString().slice(0, 10)
+                            : ""
+                        }
+                        onChange={(e) =>
+                          void updateQueue(item.id, {
+                            dueAt: new Date(
+                              `${e.target.value}T23:59:59`,
+                            ).getTime(),
+                          })
+                        }
+                      />
+                      <button
+                        onClick={() =>
+                          void updateQueue(item.id, {
+                            dueAt: Date.now() + 7 * 86_400_000,
+                            extensionCount: item.extensionCount + 1,
+                            status: "soon",
+                          })
+                        }
+                      >
+                        延期7天
+                      </button>
+                      <button
+                        onClick={() =>
+                          void updateQueue(item.id, {
+                            dueAt: Date.now() + 30 * 86_400_000,
+                            extensionCount: item.extensionCount + 1,
+                            status: "later",
+                          })
+                        }
+                      >
+                        延期30天
+                      </button>
+                      <button
+                        onClick={() => {
+                          const note = prompt("队列备注", item.note ?? "");
+                          if (note !== null)
+                            void updateQueue(item.id, { note });
+                        }}
+                      >
+                        备注
+                      </button>
+                      <button
+                        onClick={() =>
+                          void updateQueue(item.id, {
+                            inaccessible: !item.inaccessible,
+                          })
+                        }
+                      >
+                        {item.inaccessible ? "恢复可用" : "标记失效"}
+                      </button>
+                      <button onClick={() => void moveQueue(item.id, -1)}>
+                        上移
+                      </button>
+                      <button onClick={() => void moveQueue(item.id, 1)}>
+                        下移
+                      </button>
+                      <button
+                        className="danger-link"
+                        onClick={() =>
+                          void sendMessage({
+                            type: "DELETE_QUEUE_ITEM",
+                            id: item.id,
+                          }).then(load)
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
                   </div>
                 </article>
               ))}
@@ -726,13 +775,13 @@ function Options(): React.JSX.Element {
             {session?.active ? (
               <section className="settings-card">
                 <h2>
-                  {session.completed
-                    ? "目标时间已完成"
+                  {!learningLocked(session)
+                    ? "已到设定时间，可以结束学习"
                     : `剩余 ${duration(remaining)}`}
                 </h2>
                 <p>{session.allowedVideos.map((x) => x.title).join("、")}</p>
                 <button
-                  disabled={!session.completed}
+                  disabled={learningLocked(session)}
                   onClick={() =>
                     void sendMessage({ type: "STOP_LEARNING_SESSION" }).then(
                       load,
@@ -744,21 +793,26 @@ function Options(): React.JSX.Element {
               </section>
             ) : (
               <section className="settings-card">
-                <h2>选择本次学习视频</h2>
+                <h2>选择本次学习视频（允许该视频的所有分P）</h2>
+                {!queue.some((x) => x.status !== "completed") && (
+                  <p>
+                    请先在观看队列中添加视频。
+                    <button onClick={() => setView("queue")}>
+                      打开观看队列
+                    </button>
+                  </p>
+                )}
                 {queue
                   .filter((x) => x.status !== "completed")
                   .map((item) => (
                     <label className="toggle-row" key={item.id}>
                       <span>{item.title}</span>
                       <input
-                        type="checkbox"
+                        type="radio"
+                        name="learning-video"
                         checked={selected.includes(item.id)}
                         onChange={(e) =>
-                          setSelected(
-                            e.target.checked
-                              ? [...selected, item.id]
-                              : selected.filter((id) => id !== item.id),
-                          )
+                          setSelected(e.target.checked ? [item.id] : [])
                         }
                       />
                     </label>
@@ -775,16 +829,14 @@ function Options(): React.JSX.Element {
                 </label>
                 <button
                   className="primary-button"
-                  disabled={
-                    !selected.length || !settings.features["learning-mode"]
-                  }
+                  disabled={!selected.length}
                   onClick={() => void beginLearning().catch(showError)}
                 >
                   检查并二次确认
                 </button>
-                {!settings.features["learning-mode"] ? (
-                  <p>请先在功能设置中开启学习模式。</p>
-                ) : null}
+                <p className="muted">
+                  按真实时间到期；暂停视频、切到笔记软件不暂停倒计时。学习期间其他B站页面只允许返回所选视频。不限制其他网站或软件；停用或卸载扩展会使限制失效。
+                </p>
               </section>
             )}
           </>
@@ -1018,7 +1070,25 @@ function Options(): React.JSX.Element {
 function Header({ title, text }: { title: string; text: string }) {
   return (
     <header className="page-header">
-      <h1>{title}</h1>
+      <div className="section-title-row help-title">
+        <h1>{title}</h1>
+        <details className="help-popover">
+          <summary aria-label={`${title}使用指南`}>?</summary>
+          <div>
+            <strong>使用指南</strong>
+            <p>{text}</p>
+            <p>
+              {title === "观看队列"
+                ? "添加后自动尝试获取标题与封面；失败时可点击更新信息重试。加入队列不会自动开始学习。"
+                : title === "严格学习模式"
+                  ? "先把视频加入观看队列，选择一个视频和时长，再二次确认。到期前不能通过插件提前结束；所有分P均允许。"
+                  : title.includes("统计")
+                    ? "主图展示近七天日度用时，点击日期查看该天时段。总时长已包含学习和直播，三者不能相加。"
+                    : "开启对应功能后使用；设置仅保存在当前浏览器。网页尚未生效时，确认站点权限并刷新B站页面。"}
+            </p>
+          </div>
+        </details>
+      </div>
       <p>{text}</p>
     </header>
   );
@@ -1031,79 +1101,122 @@ function Metric({ label, value }: { label: string; value: string }) {
     </article>
   );
 }
-function WeeklyBars({
-  days,
-  selected,
-  onSelect,
-}: {
-  days: DailyUsageRecord[];
-  selected: string;
-  onSelect: (date: string) => void;
-}) {
-  const totals = days.map((day) => ({
-    date: day.date,
-    seconds: day.hours.reduce((n, hour) => n + hour.totalSeconds, 0),
-  }));
-  const max = Math.max(1, ...totals.map((day) => day.seconds));
-  return (
-    <div className="weekly-bars">
-      {totals.map((day) => (
-        <button
-          key={day.date}
-          className={selected === day.date ? "active" : ""}
-          onClick={() => onSelect(day.date)}
-          title={`${day.date} ${duration(day.seconds)}`}
-        >
-          <span
-            style={{ height: `${Math.max(6, (day.seconds / max) * 120)}px` }}
-          />
-          <strong>{day.date.slice(5)}</strong>
-          <small>{duration(day.seconds)}</small>
-        </button>
-      ))}
-    </div>
+const sumDay = (day: DailyUsageRecord) =>
+  day.hours.reduce(
+    (result, hour) => ({
+      totalSeconds: result.totalSeconds + hour.totalSeconds,
+      studySeconds: result.studySeconds + hour.studySeconds,
+      liveSeconds: result.liveSeconds + hour.liveSeconds,
+    }),
+    { totalSeconds: 0, studySeconds: 0, liveSeconds: 0 },
   );
-}
-function HourDetails({ day }: { day: DailyUsageRecord }) {
-  const max = Math.max(1, ...day.hours.map((hour) => hour.totalSeconds));
-  return (
-    <div className="hour-bars">
-      <strong>{day.date}</strong>
-      <div>
-        {day.hours.map((hour, i) => (
-          <span
-            key={i}
-            title={`${i}:00 总计${duration(hour.totalSeconds)}，学习${duration(hour.studySeconds)}，直播${duration(hour.liveSeconds)}`}
-            style={{
-              height: `${Math.max(3, (hour.totalSeconds / max) * 86)}px`,
-            }}
-          />
-        ))}
-      </div>
-    </div>
+
+const weekday = (value: string) =>
+  new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(
+    new Date(`${value}T12:00:00`),
   );
-}
-function Heatmap({ days }: { days: DailyUsageRecord[] }) {
-  const max = Math.max(
+
+function UsageCharts({ days }: { days: DailyUsageRecord[] }) {
+  const today = new Date().toLocaleDateString("sv-SE");
+  const [selectedDate, setSelectedDate] = useState(
+    days.find((day) => day.date === today)?.date ?? days.at(-1)?.date ?? "",
+  );
+  const totals = days.map(sumDay);
+  const dailyMax = Math.max(1, ...totals.map((item) => item.totalSeconds));
+  const selected = days.find((day) => day.date === selectedDate) ?? days.at(-1);
+  const hourlyMax = Math.max(
     1,
-    ...days.flatMap((d) => d.hours.map((h) => h.totalSeconds)),
+    ...(selected?.hours.map((hour) => hour.totalSeconds) ?? [1]),
   );
   return (
-    <div className="heatmap">
-      {days.map((day) => (
-        <div className="heatmap-row" key={day.date}>
-          <strong>{day.date.slice(5)}</strong>
-          <div>
-            {day.hours.map((hour, i) => (
-              <span
-                key={i}
-                title={`${i}:00 总计${duration(hour.totalSeconds)}，学习${duration(hour.studySeconds)}，直播${duration(hour.liveSeconds)}`}
-                style={{ opacity: 0.12 + (0.88 * hour.totalSeconds) / max }}
-              />
-            ))}
+    <div className="usage-charts">
+      <div className="chart-legend" aria-label="图例">
+        <span className="total">总时长</span>
+        <span className="study">学习</span>
+        <span className="live">直播</span>
+      </div>
+      <div className="daily-chart" aria-label="近七天日度使用柱状图">
+        {days.map((day, index) => {
+          const value = totals[index];
+          return (
+            <button
+              type="button"
+              className={day.date === selected?.date ? "selected" : ""}
+              key={day.date}
+              onClick={() => setSelectedDate(day.date)}
+              title={`${day.date}：总计${duration(value.totalSeconds)}，学习${duration(value.studySeconds)}，直播${duration(value.liveSeconds)}`}
+            >
+              <span className="daily-value">
+                {duration(value.totalSeconds)}
+              </span>
+              <span className="bar-group">
+                <i
+                  className="total"
+                  style={{
+                    height: `${(value.totalSeconds / dailyMax) * 100}%`,
+                  }}
+                />
+                <i
+                  className="study"
+                  style={{
+                    height: `${(value.studySeconds / dailyMax) * 100}%`,
+                  }}
+                />
+                <i
+                  className="live"
+                  style={{ height: `${(value.liveSeconds / dailyMax) * 100}%` }}
+                />
+              </span>
+              <strong>{weekday(day.date)}</strong>
+              <small>{day.date.slice(5)}</small>
+            </button>
+          );
+        })}
+      </div>
+      {selected ? (
+        <section className="hourly-detail">
+          <div className="chart-heading">
+            <div>
+              <h3>{selected.date} 时段分布</h3>
+              <p>点击上方日期可查看近七天任意一天</p>
+            </div>
+            <strong>{duration(sumDay(selected).totalSeconds)}</strong>
           </div>
-        </div>
-      ))}
+          <div className="hourly-scroll">
+            <div className="hourly-chart">
+              {selected.hours.map((hour, index) => (
+                <div
+                  className="hour-column"
+                  key={index}
+                  title={`${index}:00 总计${duration(hour.totalSeconds)}，学习${duration(hour.studySeconds)}，直播${duration(hour.liveSeconds)}`}
+                >
+                  <span className="bar-group">
+                    <i
+                      className="total"
+                      style={{
+                        height: `${(hour.totalSeconds / hourlyMax) * 100}%`,
+                      }}
+                    />
+                    <i
+                      className="study"
+                      style={{
+                        height: `${(hour.studySeconds / hourlyMax) * 100}%`,
+                      }}
+                    />
+                    <i
+                      className="live"
+                      style={{
+                        height: `${(hour.liveSeconds / hourlyMax) * 100}%`,
+                      }}
+                    />
+                  </span>
+                  <small>{index % 3 === 0 ? `${index}时` : ""}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
