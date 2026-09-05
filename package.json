@@ -1,6 +1,6 @@
 {
   "name": "bilibili-study-extension",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "description": "B站综合插件",
@@ -12,6 +12,7 @@
     "test": "npm run build && node scripts/filter-rules-test.mjs && node scripts/background-runtime-test.mjs && node scripts/smoke-test.mjs",
     "check": "npm run format:check && npm test",
     "build": "tsc --noEmit && vite build",
+    "package": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "preview": "vite preview"
   },
   "dependencies": {

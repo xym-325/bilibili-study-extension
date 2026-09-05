@@ -23,6 +23,17 @@ npm run check
 
 然后打开 `chrome://extensions` 或 `edge://extensions`，开启开发者模式，选择“加载已解压的扩展程序”，加载项目中的 `dist/` 目录。不要加载源码根目录，因为浏览器不能直接运行其中的 TypeScript/TSX 文件。
 
+正式版本请从 GitHub Releases 下载 `bilibili-study-extension-x.y.z.zip`，先解压，再通过“加载已解压的扩展程序”选择解压后的文件夹。GitHub 的“Download ZIP”是源码包，不能直接安装；Chrome / Edge 开发者模式也不能把普通 ZIP 当作商店扩展直接拖入。
+
+发布前执行：
+
+```bash
+npm run check
+npm run package
+```
+
+成品位于 `release/`，ZIP 第一层直接包含 `manifest.json`。
+
 ## 权限
 
 | 权限                       | 用途                                                         |
