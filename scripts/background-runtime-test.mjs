@@ -4,6 +4,8 @@ const data = {};
 let messageListener;
 const alarms = [];
 let fetchCalls = 0;
+let tabsQueryResult = [];
+let tabsSendMessage = async () => undefined;
 
 globalThis.chrome = {
   action: {
@@ -46,8 +48,8 @@ globalThis.chrome = {
     },
   },
   tabs: {
-    query: async () => [],
-    sendMessage: async () => undefined,
+    query: async () => tabsQueryResult,
+    sendMessage: (...args) => tabsSendMessage(...args),
   },
 };
 globalThis.fetch = async () => {
@@ -112,6 +114,29 @@ assert.equal(
   false,
   "保留用户主动关闭统计的选择",
 );
+tabsQueryResult = [
+  {
+    id: 101,
+    title: "B站首页",
+    url: "https://www.bilibili.com/",
+  },
+];
+tabsSendMessage = () => new Promise(() => undefined);
+await Promise.race([
+  request({
+    type: "PATCH_SETTINGS",
+    patch: {
+      interfaceOptimization: {
+        hiddenTypes: ["番剧"],
+      },
+    },
+  }),
+  new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("设置保存等待页面广播导致超时")), 50),
+  ),
+]);
+tabsQueryResult = [];
+tabsSendMessage = async () => undefined;
 await request({
   type: "PATCH_SETTINGS",
   patch: {

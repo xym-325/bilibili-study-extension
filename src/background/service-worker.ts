@@ -99,7 +99,7 @@ async function settings(): Promise<AppSettings> {
 }
 async function saveSettings(value: AppSettings): Promise<AppSettings> {
   await setStored(STORAGE_KEYS.settings, value);
-  await broadcast({ type: "SETTINGS_CHANGED", settings: value });
+  void broadcast({ type: "SETTINGS_CHANGED", settings: value });
   return value;
 }
 async function broadcast(message: unknown): Promise<void> {
