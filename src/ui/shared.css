@@ -468,6 +468,15 @@ button:disabled {
 .list-card {
   overflow: hidden;
 }
+.queue-empty-state {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  margin: 0;
+  padding: 18px 22px;
+  color: #6f7989;
+  line-height: 1.6;
+}
 .queue-card {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -911,6 +920,29 @@ th {
   gap: 20px;
   padding: 18px 0;
   border-bottom: 1px solid #edf0f3;
+}
+.filtering-card .filter-group-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 4px 0 0;
+  padding: 18px 0 2px;
+  color: #596273;
+  font-size: 13px;
+  font-weight: 700;
+}
+.filtering-card .filter-group-title::before {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: #ed658c;
+  content: "";
+}
+.filtering-card .filter-group-title::after {
+  height: 1px;
+  flex: 1;
+  background: #edf0f3;
+  content: "";
 }
 .filter-setting > span {
   min-width: 0;

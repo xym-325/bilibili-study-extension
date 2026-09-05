@@ -622,7 +622,9 @@ function Options(): React.JSX.Element {
             ) : null}
             <section className="list-card">
               {!sortedQueue.length && (
-                <p>还没有待观看视频。粘贴链接加入，或在视频页点击“稍后看”。</p>
+                <p className="queue-empty-state">
+                  还没有待观看视频。粘贴链接加入，或在视频页点击“稍后看”。
+                </p>
               )}
               {sortedQueue.map((item) => (
                 <article className="queue-card" key={item.id}>

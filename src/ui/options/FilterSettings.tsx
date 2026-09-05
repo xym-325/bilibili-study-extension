@@ -158,7 +158,7 @@ export function FilterSettings({
             }}
           />
         </label>
-        <h2>屏蔽内容</h2>
+        <h2 className="filter-group-title">屏蔽内容</h2>
         <label className="filter-setting">
           <span>
             <strong>平台广告</strong>
