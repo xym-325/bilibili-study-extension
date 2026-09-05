@@ -44,6 +44,7 @@ export interface QueueItem {
   url: string;
   title: string;
   uploader?: string;
+  coverUrl?: string;
   addedAt: number;
   updatedAt: number;
   status: QueueStatus;

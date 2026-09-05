@@ -68,13 +68,13 @@ function optimize(): void {
   const enabled =
     settings.features["interface-optimization"] &&
     ["home", "video", "cheese"].includes(page.kind);
+  document
+    .querySelectorAll<HTMLElement>("[data-bse-card-hidden]")
+    .forEach((el) => {
+      el.style.removeProperty("display");
+      delete el.dataset.bseCardHidden;
+    });
   if (!enabled) {
-    document
-      .querySelectorAll<HTMLElement>("[data-bse-card-hidden]")
-      .forEach((el) => {
-        el.style.removeProperty("display");
-        delete el.dataset.bseCardHidden;
-      });
     return;
   }
   document
@@ -124,12 +124,14 @@ function filterContent(): void {
   const words = settings.contentFilter.keywords
     .map((v) => v.trim().toLowerCase())
     .filter(Boolean);
+  restoreFilter();
   if (!settings.features["content-filter"] || !words.length) {
-    restoreFilter();
     return;
   }
   const hit = (text: string) =>
-    words.some((word) => text.toLowerCase().includes(word));
+    settings.contentFilter.mode === "all"
+      ? words.every((word) => text.toLowerCase().includes(word))
+      : words.some((word) => text.toLowerCase().includes(word));
   document
     .querySelectorAll<HTMLElement>(
       ".bili-danmaku-x-dm,.b-danmaku,[class*='danmaku-item']",

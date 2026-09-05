@@ -40,7 +40,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       saveSegment: "Alt+KeyS",
     },
   },
-  contentFilter: { keywords: [] },
+  contentFilter: { keywords: [], mode: "any" },
 };
 
 export const STORAGE_KEYS = {

@@ -31,7 +31,7 @@ export interface AppSettings {
       saveSegment: string;
     };
   };
-  contentFilter: { keywords: string[] };
+  contentFilter: { keywords: string[]; mode: "any" | "all" };
 }
 export type SettingsPatch = {
   [K in keyof AppSettings]?: AppSettings[K] extends Record<string, unknown>

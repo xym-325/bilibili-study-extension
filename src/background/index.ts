@@ -178,6 +178,8 @@ function migrateLegacyQueue(value: unknown): QueueItem[] {
           id: String(item.id ?? makeId("queue")),
           url: String(item.url ?? ""),
           title: String(item.title ?? "未命名视频"),
+          coverUrl:
+            typeof item.coverUrl === "string" ? item.coverUrl : undefined,
           status:
             item.status === "this-week" || item.status === "watching"
               ? "soon"
@@ -189,6 +191,75 @@ function migrateLegacyQueue(value: unknown): QueueItem[] {
           extensionCount: Number(item.extensionCount) || 0,
         }) as QueueItem,
     );
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'");
+}
+
+function pickMeta(html: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(
+      `<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+      "i",
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["'][^>]*>`,
+      "i",
+    ),
+    new RegExp(
+      `<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+      "i",
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["'][^>]*>`,
+      "i",
+    ),
+  ];
+  return patterns
+    .map((pattern) => pattern.exec(html)?.[1])
+    .find((value): value is string => Boolean(value));
+}
+
+function cleanTitle(value: string): string {
+  return decodeHtml(value)
+    .replace(/_\u54d4\u54e9\u54d4\u54e9_bilibili$/i, "")
+    .replace(/- \u54d4\u54e9\u54d4\u54e9.*$/i, "")
+    .trim();
+}
+
+async function fetchQueueMetadata(
+  item: Pick<QueueItem, "url" | "title" | "uploader" | "coverUrl">,
+): Promise<Partial<QueueItem>> {
+  try {
+    const response = await fetch(item.url, { credentials: "omit" });
+    if (!response.ok) return {};
+    const html = await response.text();
+    const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+    const title =
+      pickMeta(html, "og:title") ??
+      (titleMatch ? cleanTitle(titleMatch) : undefined);
+    const description = pickMeta(html, "description");
+    const uploader =
+      /UP主[:：]\s*([^，。,]+)/
+        .exec(decodeHtml(description ?? ""))?.[1]
+        ?.trim() ?? item.uploader;
+    const coverUrl = pickMeta(html, "og:image") ?? item.coverUrl;
+    return {
+      title: title ? cleanTitle(title) : item.title,
+      uploader,
+      coverUrl: coverUrl?.startsWith("//") ? `https:${coverUrl}` : coverUrl,
+    };
+  } catch {
+    return {};
+  }
 }
 function migrateLegacyBookmarks(value: unknown): ClipBookmark[] {
   if (!Array.isArray(value)) return [];
@@ -442,6 +513,7 @@ async function addQueue(input: AddQueueInput): Promise<QueueItem> {
     input.status === "soon" ? config.queue.soonDays : config.queue.laterDays;
   const item: QueueItem = {
     ...input,
+    ...(await fetchQueueMetadata(input)),
     id: makeId("queue"),
     addedAt: now,
     updatedAt: now,
@@ -451,6 +523,19 @@ async function addQueue(input: AddQueueInput): Promise<QueueItem> {
   queue.push(item);
   await setStored(STORAGE_KEYS.queue, queue);
   return item;
+}
+
+async function refreshQueueItem(id: string): Promise<QueueItem> {
+  const q = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
+  const i = q.findIndex((item) => item.id === id);
+  if (i < 0) throw new Error("未找到队列项目");
+  q[i] = {
+    ...q[i],
+    ...(await fetchQueueMetadata(q[i])),
+    updatedAt: Date.now(),
+  };
+  await setStored(STORAGE_KEYS.queue, q);
+  return q[i];
 }
 async function addBookmark(input: AddBookmarkInput): Promise<ClipBookmark> {
   const items = await getStored<ClipBookmark[]>(STORAGE_KEYS.bookmarks, []);
@@ -629,6 +714,8 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
       await updateBadge();
       return q[i];
     }
+    case "REFRESH_QUEUE_ITEM":
+      return refreshQueueItem(message.id);
     case "DELETE_QUEUE_ITEM": {
       const q = await getStored<QueueItem[]>(STORAGE_KEYS.queue, []);
       const n = q.filter((item) => item.id !== message.id);

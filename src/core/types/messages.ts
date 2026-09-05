@@ -30,6 +30,7 @@ export type ExtensionMessage =
   | { type: "LIST_QUEUE"; status?: QueueStatus }
   | { type: "ADD_QUEUE_ITEM"; item: AddQueueInput }
   | { type: "UPDATE_QUEUE_ITEM"; id: string; patch: Partial<QueueItem> }
+  | { type: "REFRESH_QUEUE_ITEM"; id: string }
   | { type: "DELETE_QUEUE_ITEM"; id: string }
   | { type: "LIST_BOOKMARKS" }
   | { type: "ADD_BOOKMARK"; bookmark: AddBookmarkInput }
@@ -63,6 +64,7 @@ export interface MessageResponseMap {
   LIST_QUEUE: QueueItem[];
   ADD_QUEUE_ITEM: QueueItem;
   UPDATE_QUEUE_ITEM: QueueItem;
+  REFRESH_QUEUE_ITEM: QueueItem;
   DELETE_QUEUE_ITEM: { deleted: boolean };
   LIST_BOOKMARKS: ClipBookmark[];
   ADD_BOOKMARK: ClipBookmark;

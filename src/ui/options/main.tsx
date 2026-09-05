@@ -28,7 +28,7 @@ const features: Record<FeatureId, string> = {
   "learning-library": "学习沉淀",
 };
 const statusLabels: Record<QueueStatus, string> = {
-  later: "稍后看池",
+  later: "稍后看",
   soon: "近期学习",
   "needs-review": "待处理",
   completed: "已完成",
@@ -96,6 +96,10 @@ function Options(): React.JSX.Element {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryTag, setLibraryTag] = useState("");
   const [notice, setNotice] = useState("");
+  const [hiddenBadgesDraft, setHiddenBadgesDraft] = useState("");
+  const [keywordsDraft, setKeywordsDraft] = useState("");
+  const [filterModeDraft, setFilterModeDraft] = useState<"any" | "all">("any");
+  const [statsDay, setStatsDay] = useState("");
   const [pendingImport, setPendingImport] = useState<AppDataExport | null>(
     null,
   );
@@ -119,6 +123,12 @@ function Options(): React.JSX.Element {
   useEffect(() => {
     void load().catch(showError);
   }, []);
+  useEffect(() => {
+    if (!settings) return;
+    setHiddenBadgesDraft(settings.interfaceOptimization.hiddenBadges.join(","));
+    setKeywordsDraft(settings.contentFilter.keywords.join("\n"));
+    setFilterModeDraft(settings.contentFilter.mode);
+  }, [settings]);
   const showError = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : "操作失败");
   async function patch(
@@ -193,6 +203,25 @@ function Options(): React.JSX.Element {
     });
     setNewUrl("");
     await load();
+  }
+  async function saveRules() {
+    await patch({
+      interfaceOptimization: {
+        ...settings!.interfaceOptimization,
+        hiddenBadges: hiddenBadgesDraft
+          .split(/[,，\n]/)
+          .map((x) => x.trim())
+          .filter(Boolean),
+      },
+      contentFilter: {
+        keywords: keywordsDraft
+          .split(/\n/)
+          .map((x) => x.trim())
+          .filter(Boolean),
+        mode: filterModeDraft,
+      },
+    });
+    setNotice("规则已保存并应用到已打开的B站页面");
   }
   async function beginLearning() {
     if (
@@ -374,7 +403,15 @@ function Options(): React.JSX.Element {
               ))}
             </section>
             <section className="settings-card">
-              <h2>界面与过滤规则</h2>
+              <div className="card-heading inline-heading">
+                <h2>界面与过滤规则</h2>
+                <details className="help-popover">
+                  <summary aria-label="查看使用指南">?</summary>
+                  <p>
+                    界面优化处理广告、直播和指定视频类型标签；评论与弹幕过滤只处理评论和弹幕。先开启对应功能，再填写规则，最后点击保存并应用。
+                  </p>
+                </details>
+              </div>
               <div className="form-grid">
                 <label className="toggle-row">
                   <span>收起明确广告卡片</span>
@@ -407,40 +444,39 @@ function Options(): React.JSX.Element {
                   />
                 </label>
                 <label className="field">
-                  <span>隐藏视频类型标签（逗号分隔）</span>
+                  <span>隐藏视频类型标签（支持中英文逗号或换行）</span>
                   <input
-                    value={settings.interfaceOptimization.hiddenBadges.join(
-                      ",",
-                    )}
-                    onChange={(e) =>
-                      void patch({
-                        interfaceOptimization: {
-                          ...settings.interfaceOptimization,
-                          hiddenBadges: e.target.value
-                            .split(",")
-                            .map((x) => x.trim())
-                            .filter(Boolean),
-                        },
-                      })
-                    }
+                    value={hiddenBadgesDraft}
+                    onChange={(e) => setHiddenBadgesDraft(e.target.value)}
                   />
+                </label>
+                <label className="field">
+                  <span>关键词命中方式</span>
+                  <select
+                    value={filterModeDraft}
+                    onChange={(e) =>
+                      setFilterModeDraft(e.target.value as "any" | "all")
+                    }
+                  >
+                    <option value="any">任一满足（析取 OR）</option>
+                    <option value="all">全部满足（合取 AND）</option>
+                  </select>
                 </label>
                 <label className="field">
                   <span>不和谐内容关键词（每行一个）</span>
                   <textarea
-                    value={settings.contentFilter.keywords.join("\n")}
-                    onChange={(e) =>
-                      void patch({
-                        contentFilter: {
-                          keywords: e.target.value
-                            .split(/\n/)
-                            .map((x) => x.trim())
-                            .filter(Boolean),
-                        },
-                      })
-                    }
+                    value={keywordsDraft}
+                    onChange={(e) => setKeywordsDraft(e.target.value)}
                   />
                 </label>
+              </div>
+              <div className="settings-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => void saveRules().catch(showError)}
+                >
+                  保存并应用
+                </button>
               </div>
             </section>
             <section className="settings-card">
@@ -500,8 +536,21 @@ function Options(): React.JSX.Element {
               />
             </section>
             <section className="settings-card">
-              <h2>本周小时热力图</h2>
-              <Heatmap days={usage.currentWeek} />
+              <h2>七天日度使用情况</h2>
+              <WeeklyBars
+                days={usage.currentWeek}
+                selected={statsDay}
+                onSelect={setStatsDay}
+              />
+            </section>
+            <section className="settings-card">
+              <h2>每日24小时时段详情</h2>
+              <HourDetails
+                day={
+                  usage.currentWeek.find((day) => day.date === statsDay) ??
+                  usage.currentWeek.at(-1)!
+                }
+              />
             </section>
             <section className="settings-card">
               <h2>月度累计</h2>
@@ -542,6 +591,13 @@ function Options(): React.JSX.Element {
             <section className="list-card">
               {sortedQueue.map((item) => (
                 <article className="data-row" key={item.id}>
+                  <div className="queue-cover">
+                    {item.coverUrl ? (
+                      <img src={item.coverUrl} alt="" loading="lazy" />
+                    ) : (
+                      <span>无封面</span>
+                    )}
+                  </div>
                   <div className="data-main">
                     <span className={`status-tag status-tag--${item.status}`}>
                       {statusLabels[item.status]}
@@ -589,6 +645,16 @@ function Options(): React.JSX.Element {
                         })
                       }
                     />
+                    <button
+                      onClick={() =>
+                        void sendMessage({
+                          type: "REFRESH_QUEUE_ITEM",
+                          id: item.id,
+                        }).then(load, showError)
+                      }
+                    >
+                      更新信息
+                    </button>
                     <button
                       onClick={() =>
                         void updateQueue(item.id, {
@@ -963,6 +1029,58 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
+  );
+}
+function WeeklyBars({
+  days,
+  selected,
+  onSelect,
+}: {
+  days: DailyUsageRecord[];
+  selected: string;
+  onSelect: (date: string) => void;
+}) {
+  const totals = days.map((day) => ({
+    date: day.date,
+    seconds: day.hours.reduce((n, hour) => n + hour.totalSeconds, 0),
+  }));
+  const max = Math.max(1, ...totals.map((day) => day.seconds));
+  return (
+    <div className="weekly-bars">
+      {totals.map((day) => (
+        <button
+          key={day.date}
+          className={selected === day.date ? "active" : ""}
+          onClick={() => onSelect(day.date)}
+          title={`${day.date} ${duration(day.seconds)}`}
+        >
+          <span
+            style={{ height: `${Math.max(6, (day.seconds / max) * 120)}px` }}
+          />
+          <strong>{day.date.slice(5)}</strong>
+          <small>{duration(day.seconds)}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+function HourDetails({ day }: { day: DailyUsageRecord }) {
+  const max = Math.max(1, ...day.hours.map((hour) => hour.totalSeconds));
+  return (
+    <div className="hour-bars">
+      <strong>{day.date}</strong>
+      <div>
+        {day.hours.map((hour, i) => (
+          <span
+            key={i}
+            title={`${i}:00 总计${duration(hour.totalSeconds)}，学习${duration(hour.studySeconds)}，直播${duration(hour.liveSeconds)}`}
+            style={{
+              height: `${Math.max(3, (hour.totalSeconds / max) * 86)}px`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 function Heatmap({ days }: { days: DailyUsageRecord[] }) {
