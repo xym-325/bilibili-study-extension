@@ -1,0 +1,61 @@
+name: Release extension
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - manifest.json
+      - package.json
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check extension
+        run: npm run check
+
+      - name: Build release archive
+        run: npm run package
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          $asset = "release/bilibili-study-extension-$version.zip"
+
+          git rev-parse --verify $tag
+          if ($LASTEXITCODE -ne 0) {
+            throw "Missing release tag: $tag"
+          }
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create $tag $asset `
+              --verify-tag `
+              --title "Bilibili Study Extension $version" `
+              --notes "Production extension package. Extract the ZIP, then load the extracted folder from the browser extension page."
+          }
