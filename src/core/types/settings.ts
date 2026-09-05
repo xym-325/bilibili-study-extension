@@ -8,6 +8,9 @@ export interface AppSettings {
     hideLiveCards: boolean;
     hiddenBadges: string[];
     matchMode: "any" | "all";
+    hiddenTypes: string[];
+    hideMarketing: boolean;
+    exceptions: string[];
   };
   watchTime: {
     dwellSeconds: number;

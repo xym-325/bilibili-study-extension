@@ -1,3 +1,5 @@
+import { learningLocked, learningRemaining } from "../../core/learning/session";
+import { checkSiteAccess } from "../permissions";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { sendMessage } from "../../core/message/client";
@@ -31,17 +33,7 @@ function Popup(): React.JSX.Element {
     setUsage(b.today);
     setSession(c);
     setPage(d);
-    const hasAccess = await chrome.permissions.contains({
-      origins: ["https://*.bilibili.com/*"],
-    });
-    if (!hasAccess) {
-      const key = "bse.permission-warning-shown";
-      const stored = await chrome.storage.local.get(key);
-      if (!stored[key]) {
-        setNotice("缺少B站网站访问权限，请在扩展详情中恢复后使用。");
-        await chrome.storage.local.set({ [key]: true });
-      }
-    }
+    await checkSiteAccess(setNotice, false);
   }
   useEffect(() => {
     void load().catch((e: unknown) =>
@@ -50,15 +42,8 @@ function Popup(): React.JSX.Element {
   }, []);
   async function toggle(id: "interface-optimization" | "watch-time") {
     if (!settings) return;
-    if (
-      !settings.features[id] &&
-      !(await chrome.permissions.contains({
-        origins: ["https://*.bilibili.com/*"],
-      }))
-    ) {
-      setNotice("该功能需要B站网站访问权限，请在扩展详情中恢复。");
+    if (!settings.features[id] && !(await checkSiteAccess(setNotice, true)))
       return;
-    }
     const next = await sendMessage({
       type: "PATCH_SETTINGS",
       patch: {
@@ -68,14 +53,7 @@ function Popup(): React.JSX.Element {
     setSettings(next);
   }
   async function addCurrent() {
-    if (
-      !(await chrome.permissions.contains({
-        origins: ["https://*.bilibili.com/*"],
-      }))
-    ) {
-      setNotice("加入当前视频需要B站网站访问权限，请先恢复。");
-      return;
-    }
+    if (!(await checkSiteAccess(setNotice, true))) return;
     if (!page?.bvid && !page?.cheeseEpisodeId) {
       setNotice("当前不是支持的B站视频");
       return;
@@ -94,9 +72,7 @@ function Popup(): React.JSX.Element {
     });
     setNotice("已加入稍后看");
   }
-  const remaining = session
-    ? Math.max(0, session.targetSeconds - session.elapsedSeconds)
-    : 0;
+  const remaining = learningRemaining(session);
   return (
     <main className="popup-shell">
       <header className="popup-header">
@@ -117,13 +93,13 @@ function Popup(): React.JSX.Element {
       {session?.active ? (
         <section className="compact-card">
           <strong>
-            {session.completed
+            {!learningLocked(session)
               ? "学习时间已完成"
               : `剩余 ${duration(remaining)}`}
           </strong>
           <button
             className="full-width"
-            disabled={!session.completed}
+            disabled={learningLocked(session)}
             onClick={() =>
               void sendMessage({ type: "STOP_LEARNING_SESSION" }).then(load)
             }
@@ -166,10 +142,21 @@ function Popup(): React.JSX.Element {
       {notice ? <p className="alert">{notice}</p> : null}
       <button
         className="full-width"
-        onClick={() => void chrome.runtime.openOptionsPage()}
+        onClick={() =>
+          void chrome.runtime
+            .openOptionsPage()
+            .catch(() =>
+              chrome.tabs.create({
+                url: chrome.runtime.getURL("src/ui/options/index.html"),
+              }),
+            )
+        }
       >
         打开插件控制台
       </button>
+      <p className="privacy-note">
+        找不到入口？在浏览器工具栏的扩展菜单中固定“B站综合插件”。
+      </p>
       <p className="privacy-note">不读取非B站网页，数据只保存在本机。</p>
     </main>
   );

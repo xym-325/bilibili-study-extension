@@ -1,4 +1,10 @@
 import "./styles.css";
+import { RecommendationFilter } from "./recommendation-filter";
+import {
+  learningLocked,
+  learningRemaining,
+  refreshLearning,
+} from "../core/learning/session";
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../core/config/defaults";
 import { sendMessage } from "../core/message/client";
 import { detectPage, videoKey } from "../core/page/detect";
@@ -27,6 +33,9 @@ let toolbar: HTMLElement | null = null;
 let progressCache: CourseProgress[] = [];
 let queueCache: QueueItem[] = [];
 let handledIntent = "";
+let lastReportedLearningUrl = "";
+let completionChecked = "";
+const recommendations = new RecommendationFilter(settings);
 const safe = <T>(promise: Promise<T>) =>
   promise.catch((error) => {
     console.warn("[BSE]", error);
@@ -43,20 +52,26 @@ function allowed(current = page): boolean {
   );
 }
 function enforceLearning(): void {
-  const active = Boolean(session?.active && allowed());
+  const locked = learningLocked(session);
+  const active = Boolean(locked && allowed());
+  document.documentElement.classList.remove("bse-learning-redirecting");
   document.documentElement.classList.toggle("bse-learning-active", active);
   document.documentElement.classList.toggle(
     "bse-learning-danmaku-hidden",
     active && !danmakuVisible,
   );
-  if (!session?.active || page.kind === "auth" || allowed()) {
-    if (active)
+  if (!locked || page.kind === "auth" || allowed()) {
+    if (active && lastReportedLearningUrl !== location.href)
       void safe(
-        sendMessage({ type: "SET_LEARNING_LAST_URL", url: location.href }),
+        sendMessage({ type: "SET_LEARNING_LAST_URL", url: location.href }).then(
+          () => {
+            lastReportedLearningUrl = location.href;
+          },
+        ),
       );
     return;
   }
-  const fallback = session.lastLearningUrl ?? session.allowedVideos[0]?.url;
+  const fallback = session?.lastLearningUrl ?? session?.allowedVideos[0]?.url;
   if (fallback && location.href !== fallback) {
     document.documentElement.classList.add("bse-learning-redirecting");
     location.replace(fallback);
@@ -64,77 +79,20 @@ function enforceLearning(): void {
 }
 const textOf = (el: Element) =>
   (el.textContent ?? "").replace(/\s+/g, " ").trim();
-const cardSelector = [
-  ".bili-video-card",
-  ".feed-card",
-  ".video-page-card-small",
-  ".bili-live-card",
-  "[class*='video-card']",
-  "[class*='live-card']",
-  "[class*='floor-card']",
-].join(",");
-function restoreOptimizedCards(): void {
+function optimize(): void {
+  // 0.1.3 used inline display styles. Clear those upgrade leftovers once the
+  // current script takes ownership so an old decision cannot leave blank gaps.
   document
     .querySelectorAll<HTMLElement>("[data-bse-card-hidden]")
     .forEach((el) => {
       el.style.removeProperty("display");
+      el.classList.remove("bse-card-hidden");
       delete el.dataset.bseCardHidden;
     });
-}
-function layoutItemFor(card: HTMLElement): HTMLElement {
-  let current = card;
-  for (let depth = 0; depth < 5; depth += 1) {
-    const parent = current.parentElement;
-    if (!parent || parent === document.body) break;
-    const display = getComputedStyle(parent).display;
-    if (
-      (display === "grid" || display === "inline-grid") &&
-      parent.children.length >= 3
-    )
-      return current;
-    current = parent;
-  }
-  return card;
-}
-function optimize(): void {
-  const enabled =
-    settings.features["interface-optimization"] &&
-    ["home", "video", "cheese"].includes(page.kind);
-  restoreOptimizedCards();
-  if (!enabled) return;
-  const rules = settings.interfaceOptimization.hiddenBadges
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  document.querySelectorAll<HTMLElement>(cardSelector).forEach((card) => {
-    const text = textOf(card);
-    const normalizedText = text.toLowerCase();
-    const ad =
-      /(广告|推广|赞助)/.test(text) ||
-      Boolean(
-        card.querySelector("[class*='ad-tag'],[class*='adcard'],[data-ad]"),
-      );
-    const live =
-      /(^|\s)(直播中?|正在直播)(\s|$)/.test(text) ||
-      Boolean(
-        card.querySelector(
-          "[class*='live-tag'],[class*='live-status'],[class*='living']",
-        ),
-      );
-    const ruleMatched =
-      rules.length > 0 &&
-      (settings.interfaceOptimization.matchMode === "all"
-        ? rules.every((rule) => normalizedText.includes(rule))
-        : rules.some((rule) => normalizedText.includes(rule)));
-    if (
-      (settings.interfaceOptimization.hideAds && ad) ||
-      (settings.interfaceOptimization.hideLiveCards && live) ||
-      ruleMatched
-    ) {
-      const target = layoutItemFor(card);
-      target.style.setProperty("display", "none", "important");
-      target.dataset.bseCardHidden = "true";
-    }
-  });
+  recommendations.configure(
+    settings,
+    ["home", "video", "cheese"].includes(page.kind),
+  );
 }
 function restoreFilter(): void {
   document
@@ -154,17 +112,17 @@ function restoreFilter(): void {
       delete el.dataset.bseFilteredDanmaku;
     });
 }
-function filterContent(): void {
+function filterContent(root: ParentNode = document): void {
   const words = settings.contentFilter.keywords
     .map((v) => v.trim().toLowerCase())
     .filter(Boolean);
   if (!settings.features["content-filter"] || !words.length) {
-    restoreFilter();
+    if (root === document) restoreFilter();
     return;
   }
   const hit = (text: string) =>
     words.some((word) => text.toLowerCase().includes(word));
-  document
+  root
     .querySelectorAll<HTMLElement>(
       ".bili-danmaku-x-dm,.b-danmaku,[class*='danmaku-item']",
     )
@@ -174,7 +132,7 @@ function filterContent(): void {
         el.dataset.bseFilteredDanmaku = "true";
       }
     });
-  document
+  root
     .querySelectorAll<HTMLElement>(
       ".reply-item,.root-reply-container,.sub-reply-item",
     )
@@ -211,9 +169,10 @@ function loop(): void {
 function applyIntent(target: HTMLVideoElement): void {
   if (handledIntent === location.href) return;
   const url = new URL(location.href);
-  const start = Number(
-    url.searchParams.get("bse_a") ?? url.searchParams.get("t"),
-  );
+  const requestedStart =
+    url.searchParams.get("bse_a") ?? url.searchParams.get("t");
+  if (requestedStart === null) return;
+  const start = Number(requestedStart);
   const end = Number(url.searchParams.get("bse_b"));
   if (!Number.isFinite(start)) return;
   const apply = () => {
@@ -253,6 +212,7 @@ function flash(message: string): void {
   }, 1600);
 }
 async function addQueue(): Promise<void> {
+  page = detectPage();
   const player = currentVideo();
   const item = await sendMessage({
     type: "ADD_QUEUE_ITEM",
@@ -321,16 +281,13 @@ function updateToolbar(): void {
   const stop = toolbar.querySelector<HTMLButtonElement>(".bse-stop");
   const dm = toolbar.querySelector<HTMLButtonElement>(".bse-danmaku");
   if (timer) {
-    timer.hidden = !learning;
-    timer.textContent = learning
-      ? session?.completed
-        ? "学习时间已完成"
-        : `剩余 ${fmt((session?.targetSeconds ?? 0) - (session?.elapsedSeconds ?? 0))}`
-      : "";
+    // No on-page countdown, completion text, sounds or automatic toast.
+    timer.hidden = true;
+    timer.textContent = "";
   }
   if (stop) {
     stop.hidden = !learning;
-    stop.disabled = !session?.completed;
+    stop.disabled = learningLocked(session);
   }
   if (dm) {
     dm.hidden = !learning;
@@ -356,7 +313,7 @@ function mountToolbar(): void {
   toolbar = document.createElement("aside");
   toolbar.id = "bse-player-toolbar";
   const title = document.createElement("strong");
-  title.textContent = "学习工具";
+  title.textContent = "视频工具";
   toolbar.append(title);
   if (settings.features["watch-queue"])
     toolbar.append(button("稍后看", () => void safe(addQueue())));
@@ -398,11 +355,13 @@ function mountToolbar(): void {
   dm.className = "bse-danmaku";
   toolbar.append(dm);
   const stop = button("结束学习", () => {
-    void safe(sendMessage({ type: "STOP_LEARNING_SESSION" })).then(() => {
-      session = null;
-      enforceLearning();
-      updateToolbar();
-    });
+    void safe(
+      sendMessage({ type: "STOP_LEARNING_SESSION" }).then(() => {
+        session = null;
+        enforceLearning();
+        updateToolbar();
+      }),
+    );
   });
   stop.className = "bse-stop";
   toolbar.append(stop);
@@ -414,7 +373,10 @@ function mountToolbar(): void {
 }
 function keyboard(event: KeyboardEvent): void {
   if (
+    (!settings.features["player-tools"] &&
+      !settings.features["learning-library"]) ||
     !settings.playerTools.shortcutsEnabled ||
+    (event.target instanceof HTMLElement && event.target.isContentEditable) ||
     event.target instanceof HTMLInputElement ||
     event.target instanceof HTMLTextAreaElement
   )
@@ -506,7 +468,7 @@ async function recordProgress(): Promise<void> {
 }
 function eligibility(): { total: boolean; study: boolean; live: boolean } {
   const v = currentVideo();
-  const pip = document.pictureInPictureElement === v;
+  const pip = Boolean(v && document.pictureInPictureElement === v);
   const focused = document.visibilityState === "visible" && document.hasFocus();
   const study = Boolean(session?.active && allowed() && (focused || pip));
   const playing = Boolean(v && !v.paused && !v.ended);
@@ -554,20 +516,38 @@ function updatePage(): void {
   mountToolbar();
 }
 function observe(): void {
-  let scheduled = false;
-  new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    window.setTimeout(() => {
-      scheduled = false;
-      const latest = detectPage();
-      page.title = latest.title ?? page.title;
-      page.uploader = latest.uploader ?? page.uploader;
-      optimize();
-      filterContent();
-      currentVideo();
-      mountToolbar();
-    }, 120);
+  const pending = new Set<Element>();
+  let timer: number | undefined;
+  const selector =
+    ".bili-danmaku-x-dm,.b-danmaku,[class*='danmaku-item'],.reply-item,.root-reply-container,.sub-reply-item";
+  new MutationObserver((records) => {
+    if (
+      !settings.features["content-filter"] ||
+      !settings.contentFilter.keywords.length
+    )
+      return;
+    for (const record of records) {
+      const target =
+        record.target instanceof Element
+          ? record.target
+          : record.target.parentElement;
+      if (!target || target.closest("#bse-player-toolbar,.bse-reveal-comment"))
+        continue;
+      const item = target.closest(selector);
+      if (item?.parentElement) pending.add(item.parentElement);
+      for (const node of record.addedNodes)
+        if (node instanceof Element) {
+          if (node.matches(selector) && node.parentElement)
+            pending.add(node.parentElement);
+          else if (node.querySelector(selector)) pending.add(node);
+        }
+    }
+    if (!pending.size || timer !== undefined) return;
+    timer = window.setTimeout(() => {
+      timer = undefined;
+      for (const root of pending) if (root.isConnected) filterContent(root);
+      pending.clear();
+    }, 250);
   }).observe(document.documentElement, { childList: true, subtree: true });
 }
 chrome.runtime.onMessage.addListener((raw, _sender, respond) => {
@@ -575,16 +555,27 @@ chrome.runtime.onMessage.addListener((raw, _sender, respond) => {
     type?: string;
     settings?: AppSettings;
     session?: LearningSession | null;
+    key?: string;
   };
-  if (message.type === "CONTENT_GET_PAGE") respond(page);
+  if (message.type === "CONTENT_FILTER_REPORT")
+    respond(recommendations.report());
+  else if (message.type === "CONTENT_RESTORE_CARD" && message.key) {
+    recommendations.restore(message.key);
+    respond({ restored: true });
+  } else if (message.type === "CONTENT_GET_PAGE") respond(detectPage());
   else if (message.type === "CONTENT_GET_PLAYER")
     respond(playerSnapshot(currentVideo()));
   else if (message.type === "SETTINGS_CHANGED" && message.settings) {
     settings = message.settings;
-    updatePage();
+    restoreFilter();
+    toolbar?.remove();
+    toolbar = null;
+    optimize();
+    filterContent();
+    mountToolbar();
   } else if (message.type === "LEARNING_SESSION_CHANGED") {
     if (message.session?.id !== session?.id) danmakuVisible = false;
-    session = message.session ?? null;
+    session = refreshLearning(message.session ?? null);
     enforceLearning();
     mountToolbar();
   } else if (message.type === "DATA_CHANGED") void initialize();
@@ -604,6 +595,14 @@ async function initialize(): Promise<void> {
   updatePage();
 }
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[STORAGE_KEYS.learningSession]) {
+    session = refreshLearning(
+      (changes[STORAGE_KEYS.learningSession]
+        .newValue as LearningSession | null) ?? null,
+    );
+    enforceLearning();
+    mountToolbar();
+  }
   if (area === "local" && changes[STORAGE_KEYS.queue])
     queueCache = (changes[STORAGE_KEYS.queue].newValue as QueueItem[]) ?? [];
 });
@@ -640,7 +639,21 @@ setInterval(() => {
     lastUrl = location.href;
     updatePage();
   }
+  if (
+    session?.active &&
+    !learningLocked(session) &&
+    completionChecked !== session.id
+  ) {
+    completionChecked = session.id;
+    void safe(
+      sendMessage({ type: "GET_LEARNING_SESSION" }).then((value) => {
+        session = value;
+      }),
+    );
+  }
   enforceLearning();
+  currentVideo();
+  mountToolbar();
   updateToolbar();
 }, 1000);
 setInterval(() => void safe(heartbeat()), 5000);

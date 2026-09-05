@@ -1,6 +1,6 @@
 {
   "name": "bilibili-study-extension",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "description": "B站综合插件",
@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run build && node scripts/background-runtime-test.mjs && node scripts/smoke-test.mjs",
+    "test": "npm run build && node scripts/filter-rules-test.mjs && node scripts/background-runtime-test.mjs && node scripts/smoke-test.mjs",
     "check": "npm run format:check && npm test",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
@@ -30,6 +30,6 @@
     "prettier": "^3.9.6"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.18.0"
   }
 }

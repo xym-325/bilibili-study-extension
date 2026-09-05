@@ -128,6 +128,7 @@ export interface MonthlyUsageRecord extends UsageBucket {
   month: string;
 }
 export interface UsageStore {
+  lastCounted?: Partial<Record<keyof UsageBucket, number>>;
   days: Record<string, DailyUsageRecord>;
   months: Record<string, MonthlyUsageRecord>;
 }

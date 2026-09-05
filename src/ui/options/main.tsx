@@ -1,3 +1,6 @@
+import { FilterSettings } from "./FilterSettings";
+import { learningRemaining, learningLocked } from "../../core/learning/session";
+import { checkSiteAccess } from "../permissions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { sendMessage } from "../../core/message/client";
@@ -17,7 +20,14 @@ import type {
 import type { AppSettings } from "../../core/types/settings";
 import "../shared.css";
 
-type View = "features" | "stats" | "queue" | "learning" | "library" | "data";
+type View =
+  | "optimization"
+  | "features"
+  | "stats"
+  | "queue"
+  | "learning"
+  | "library"
+  | "data";
 const features: Record<FeatureId, string> = {
   "interface-optimization": "界面优化",
   "watch-time": "观看时长",
@@ -29,7 +39,7 @@ const features: Record<FeatureId, string> = {
 };
 const statusLabels: Record<QueueStatus, string> = {
   later: "稍后看",
-  soon: "近期学习",
+  soon: "近期观看",
   "needs-review": "待处理",
   completed: "已完成",
 };
@@ -95,8 +105,6 @@ function Options(): React.JSX.Element {
   const [minutes, setMinutes] = useState(60);
   const [newUrl, setNewUrl] = useState("");
   const [addingQueue, setAddingQueue] = useState(false);
-  const [homeRuleDraft, setHomeRuleDraft] = useState("");
-  const [homeRuleMode, setHomeRuleMode] = useState<"any" | "all">("any");
   const [contentRuleDraft, setContentRuleDraft] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryTag, setLibraryTag] = useState("");
@@ -108,19 +116,19 @@ function Options(): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   async function load() {
     setLoadError("");
-    const [a, b, c, d, e, f] = await Promise.all([
+    const [a, b] = await Promise.all([
       sendMessage({ type: "GET_SETTINGS" }),
       sendMessage({ type: "GET_USAGE_SUMMARY" }),
+    ]);
+    setSettings(a);
+    setContentRuleDraft(a.contentFilter.keywords.join("\n"));
+    setUsage(b);
+    const [c, d, e, f] = await Promise.all([
       sendMessage({ type: "LIST_QUEUE" }),
       sendMessage({ type: "LIST_BOOKMARKS" }),
       sendMessage({ type: "LIST_PROGRESS" }),
       sendMessage({ type: "GET_LEARNING_SESSION" }),
     ]);
-    setSettings(a);
-    setHomeRuleDraft(a.interfaceOptimization.hiddenBadges.join(","));
-    setHomeRuleMode(a.interfaceOptimization.matchMode);
-    setContentRuleDraft(a.contentFilter.keywords.join("\n"));
-    setUsage(b);
     setQueue(c);
     setBookmarks(d);
     setProgress(e);
@@ -151,11 +159,41 @@ function Options(): React.JSX.Element {
       window.clearInterval(timer);
     };
   }, [view]);
+  const [, tickClock] = useState(0);
+  useEffect(() => {
+    if (view !== "learning") return;
+    let alive = true;
+    const update = () =>
+      void sendMessage({ type: "GET_LEARNING_SESSION" })
+        .then((value) => {
+          if (alive) setSession(value);
+        })
+        .catch(showError);
+    update();
+    const timer = window.setInterval(() => {
+      tickClock((v) => v + 1);
+    }, 1000);
+    const poll = window.setInterval(update, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      clearInterval(poll);
+    };
+  }, [view]);
+  useEffect(() => {
+    void checkSiteAccess(setNotice, false).catch(showError);
+  }, []);
   const showError = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : "操作失败");
   async function patch(
     value: Parameters<typeof sendMessage<"PATCH_SETTINGS">>[0]["patch"],
   ) {
+    if (
+      value.features &&
+      Object.values(value.features).some(Boolean) &&
+      !(await checkSiteAccess(setNotice, true))
+    )
+      return;
     const next = await sendMessage({ type: "PATCH_SETTINGS", patch: value });
     setSettings(next);
   }
@@ -176,23 +214,13 @@ function Options(): React.JSX.Element {
   }
   async function saveFilterRules() {
     if (!settings) return;
-    const homeRules = homeRuleDraft
-      .split(/[,，\n]+/)
-      .map((value) => value.trim())
-      .filter(Boolean);
     const contentRules = contentRuleDraft
       .split(/\n+/)
       .map((value) => value.trim())
       .filter(Boolean);
     await patch({
-      interfaceOptimization: {
-        ...settings.interfaceOptimization,
-        hiddenBadges: homeRules,
-        matchMode: homeRuleMode,
-      },
       contentFilter: { keywords: contentRules },
     });
-    setHomeRuleDraft(homeRules.join(","));
     setContentRuleDraft(contentRules.join("\n"));
     setNotice("过滤规则已保存并重新应用");
   }
@@ -220,7 +248,11 @@ function Options(): React.JSX.Element {
     await load();
   }
   async function addUrl() {
-    const url = newUrl.trim();
+    if (!(await checkSiteAccess(setNotice, true))) return;
+    const raw = newUrl.trim();
+    const url = /^BV[0-9a-z]+$/i.test(raw)
+      ? `https://www.bilibili.com/video/${raw}`
+      : raw;
     const bvid = parseBvid(url);
     const ep = parseCheeseEpisodeId(url);
     let hostname = "";
@@ -254,6 +286,7 @@ function Options(): React.JSX.Element {
     }
   }
   async function beginLearning() {
+    if (!(await checkSiteAccess(setNotice, true))) return;
     if (
       !confirm(
         `二次确认：开始${minutes}分钟学习，期间不能修改视频、时长或提前退出？`,
@@ -312,10 +345,8 @@ function Options(): React.JSX.Element {
     await sendMessage({ type: "CLEAR_ALL_DATA" });
     await load();
   }
-  const locked = Boolean(session?.active && !session.completed);
-  const remaining = session
-    ? Math.max(0, session.targetSeconds - session.elapsedSeconds)
-    : 0;
+  const locked = learningLocked(session);
+  const remaining = learningRemaining(session);
   const soon = queue.filter((x) => x.status === "soon");
   const soonMinutes = soon.reduce(
     (n, x) => n + (x.durationSeconds ?? 0) / 60,
@@ -379,6 +410,7 @@ function Options(): React.JSX.Element {
           {(
             [
               ["features", "功能设置"],
+              ["optimization", "界面优化"],
               ["stats", "观看统计"],
               ["queue", "观看队列"],
               ["learning", "学习模式"],
@@ -395,7 +427,9 @@ function Options(): React.JSX.Element {
             </button>
           ))}
         </nav>
-        <p className="sidebar-note">七项功能默认关闭；无插件账户、无云同步。</p>
+        <p className="sidebar-note">
+          新安装默认统计用时；无插件账户、无云同步。
+        </p>
       </aside>
       <section className="content-area">
         {notice ? (
@@ -408,7 +442,7 @@ function Options(): React.JSX.Element {
           <>
             <Header
               title="功能设置"
-              text="所有功能默认关闭，可以按需单独开启。"
+              text="观看统计在新安装时默认开启；学习模式和观看队列在各自页面使用。"
             />
             {!settings.onboardingComplete ? (
               <section className="onboarding-card">
@@ -427,108 +461,57 @@ function Options(): React.JSX.Element {
               </section>
             ) : null}
             <section className="feature-grid">
-              {Object.entries(features).map(([id, label]) => (
-                <article className="feature-card" key={id}>
-                  <div>
-                    <h2>{label}</h2>
-                    <p>启用后仅在对应B站页面生效。</p>
-                  </div>
-                  <label className="toggle-control">
-                    <input
-                      type="checkbox"
-                      checked={settings.features[id as FeatureId]}
-                      onChange={() => void toggleFeature(id as FeatureId)}
-                    />
-                    <span>
-                      {settings.features[id as FeatureId] ? "已开启" : "已关闭"}
-                    </span>
-                  </label>
-                </article>
-              ))}
+              {Object.entries(features)
+                .filter(
+                  ([id]) =>
+                    ![
+                      "learning-mode",
+                      "watch-queue",
+                      "interface-optimization",
+                    ].includes(id),
+                )
+                .map(([id, label]) => (
+                  <article className="feature-card" key={id}>
+                    <div>
+                      <h2>{label}</h2>
+                      <p>启用后仅在对应B站页面生效。</p>
+                    </div>
+                    <label className="toggle-control">
+                      <input
+                        type="checkbox"
+                        checked={settings.features[id as FeatureId]}
+                        onChange={() => void toggleFeature(id as FeatureId)}
+                      />
+                      <span>
+                        {settings.features[id as FeatureId]
+                          ? "已开启"
+                          : "已关闭"}
+                      </span>
+                    </label>
+                  </article>
+                ))}
             </section>
             <section className="settings-card">
-              <div className="section-title-row help-title">
-                <h2>界面与过滤规则</h2>
-                <details className="help-popover">
-                  <summary aria-label="查看界面与过滤规则使用指南">?</summary>
-                  <div>
-                    <strong>使用指南</strong>
-                    <p>
-                      界面优化负责收起首页广告、直播和命中首页规则的视频；评论与弹幕过滤只处理视频页的评论和弹幕。
-                    </p>
-                    <p>
-                      “任一满足”表示命中任意一个词就收起；“全部满足”表示同一卡片同时包含全部词才收起。编辑后必须点击“保存并应用”。
-                    </p>
-                    <p>
-                      隐藏后只让其余已有推荐自动补位，不会请求或生成新的B站推荐。
-                    </p>
-                  </div>
-                </details>
-              </div>
-              <div className="form-grid">
-                <label className="toggle-row">
-                  <span>收起明确广告卡片</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.interfaceOptimization.hideAds}
-                    onChange={(e) =>
-                      void patch({
-                        interfaceOptimization: {
-                          ...settings.interfaceOptimization,
-                          hideAds: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                </label>
-                <label className="toggle-row">
-                  <span>收起直播推荐卡片</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.interfaceOptimization.hideLiveCards}
-                    onChange={(e) =>
-                      void patch({
-                        interfaceOptimization: {
-                          ...settings.interfaceOptimization,
-                          hideLiveCards: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>首页视频屏蔽词（逗号或换行分隔）</span>
-                  <input
-                    value={homeRuleDraft}
-                    onChange={(e) => setHomeRuleDraft(e.target.value)}
-                    placeholder="例如：犯罪,案件"
-                  />
-                </label>
-                <label className="field">
-                  <span>不和谐内容关键词（每行一个）</span>
-                  <textarea
-                    value={contentRuleDraft}
-                    onChange={(e) => setContentRuleDraft(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>首页屏蔽词之间的关系</span>
-                  <select
-                    value={homeRuleMode}
-                    onChange={(e) =>
-                      setHomeRuleMode(e.target.value as "any" | "all")
-                    }
-                  >
-                    <option value="any">任一满足（析取 / OR）</option>
-                    <option value="all">全部满足（合取 / AND）</option>
-                  </select>
-                </label>
-              </div>
-              <button
-                className="primary-button save-rules"
-                onClick={() => void saveFilterRules().catch(showError)}
-              >
-                保存并应用规则
+              <h2>推荐内容设置</h2>
+              <p>广告、直播、类型角标及营销视频，统一在界面优化中管理。</p>
+              <button onClick={() => setView("optimization")}>
+                打开界面优化
+              </button>
+            </section>
+            <section className="settings-card">
+              <h2>评论与弹幕过滤词</h2>
+              <p>
+                只过滤已加载的评论与弹幕，不读取其他视频评论。与首页标题关键词相互独立。
+              </p>
+              <label className="field">
+                <span>每行一个词</span>
+                <textarea
+                  value={contentRuleDraft}
+                  onChange={(e) => setContentRuleDraft(e.target.value)}
+                />
+              </label>
+              <button onClick={() => void saveFilterRules().catch(showError)}>
+                保存并应用
               </button>
             </section>
             <section className="settings-card">
@@ -588,7 +571,7 @@ function Options(): React.JSX.Element {
               />
             </section>
             <section className="settings-card">
-              <h2>本周七天使用情况</h2>
+              <h2>近七天使用情况</h2>
               <UsageCharts days={usage.currentWeek} />
             </section>
             <section className="settings-card">
@@ -608,15 +591,22 @@ function Options(): React.JSX.Element {
             </section>
           </>
         ) : null}
+        {view === "optimization" && settings ? (
+          <FilterSettings
+            settings={settings}
+            patch={patch}
+            showError={showError}
+          />
+        ) : null}
         {view === "queue" ? (
           <>
             <Header
               title="观看队列"
-              text="B站收藏负责长期保存，插件队列只负责什么时候看。"
+              text="独立的待观看清单，可放学习或娱乐视频；学习模式只使用你选中的视频。"
             />
             <div className="toolbar">
               <input
-                placeholder="粘贴BV视频或B站课堂链接"
+                placeholder="输入BV号、视频链接或B站课堂链接"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
               />
@@ -628,9 +618,12 @@ function Options(): React.JSX.Element {
               </button>
             </div>
             {overLimit ? (
-              <p className="alert">近期学习超过5个或3小时，仍可继续添加。</p>
+              <p className="alert">近期观看超过5个或3小时，仍可继续添加。</p>
             ) : null}
             <section className="list-card">
+              {!sortedQueue.length && (
+                <p>还没有待观看视频。粘贴链接加入，或在视频页点击“稍后看”。</p>
+              )}
               {sortedQueue.map((item) => (
                 <article className="queue-card" key={item.id}>
                   <button
@@ -782,13 +775,13 @@ function Options(): React.JSX.Element {
             {session?.active ? (
               <section className="settings-card">
                 <h2>
-                  {session.completed
-                    ? "目标时间已完成"
+                  {!learningLocked(session)
+                    ? "已到设定时间，可以结束学习"
                     : `剩余 ${duration(remaining)}`}
                 </h2>
                 <p>{session.allowedVideos.map((x) => x.title).join("、")}</p>
                 <button
-                  disabled={!session.completed}
+                  disabled={learningLocked(session)}
                   onClick={() =>
                     void sendMessage({ type: "STOP_LEARNING_SESSION" }).then(
                       load,
@@ -800,21 +793,26 @@ function Options(): React.JSX.Element {
               </section>
             ) : (
               <section className="settings-card">
-                <h2>选择本次学习视频</h2>
+                <h2>选择本次学习视频（允许该视频的所有分P）</h2>
+                {!queue.some((x) => x.status !== "completed") && (
+                  <p>
+                    请先在观看队列中添加视频。
+                    <button onClick={() => setView("queue")}>
+                      打开观看队列
+                    </button>
+                  </p>
+                )}
                 {queue
                   .filter((x) => x.status !== "completed")
                   .map((item) => (
                     <label className="toggle-row" key={item.id}>
                       <span>{item.title}</span>
                       <input
-                        type="checkbox"
+                        type="radio"
+                        name="learning-video"
                         checked={selected.includes(item.id)}
                         onChange={(e) =>
-                          setSelected(
-                            e.target.checked
-                              ? [...selected, item.id]
-                              : selected.filter((id) => id !== item.id),
-                          )
+                          setSelected(e.target.checked ? [item.id] : [])
                         }
                       />
                     </label>
@@ -831,16 +829,14 @@ function Options(): React.JSX.Element {
                 </label>
                 <button
                   className="primary-button"
-                  disabled={
-                    !selected.length || !settings.features["learning-mode"]
-                  }
+                  disabled={!selected.length}
                   onClick={() => void beginLearning().catch(showError)}
                 >
                   检查并二次确认
                 </button>
-                {!settings.features["learning-mode"] ? (
-                  <p>请先在功能设置中开启学习模式。</p>
-                ) : null}
+                <p className="muted">
+                  按真实时间到期；暂停视频、切到笔记软件不暂停倒计时。学习期间其他B站页面只允许返回所选视频。不限制其他网站或软件；停用或卸载扩展会使限制失效。
+                </p>
               </section>
             )}
           </>
@@ -1074,7 +1070,25 @@ function Options(): React.JSX.Element {
 function Header({ title, text }: { title: string; text: string }) {
   return (
     <header className="page-header">
-      <h1>{title}</h1>
+      <div className="section-title-row help-title">
+        <h1>{title}</h1>
+        <details className="help-popover">
+          <summary aria-label={`${title}使用指南`}>?</summary>
+          <div>
+            <strong>使用指南</strong>
+            <p>{text}</p>
+            <p>
+              {title === "观看队列"
+                ? "添加后自动尝试获取标题与封面；失败时可点击更新信息重试。加入队列不会自动开始学习。"
+                : title === "严格学习模式"
+                  ? "先把视频加入观看队列，选择一个视频和时长，再二次确认。到期前不能通过插件提前结束；所有分P均允许。"
+                  : title.includes("统计")
+                    ? "主图展示近七天日度用时，点击日期查看该天时段。总时长已包含学习和直播，三者不能相加。"
+                    : "开启对应功能后使用；设置仅保存在当前浏览器。网页尚未生效时，确认站点权限并刷新B站页面。"}
+            </p>
+          </div>
+        </details>
+      </div>
       <p>{text}</p>
     </header>
   );
@@ -1121,7 +1135,7 @@ function UsageCharts({ days }: { days: DailyUsageRecord[] }) {
         <span className="study">学习</span>
         <span className="live">直播</span>
       </div>
-      <div className="daily-chart" aria-label="本周七天日度使用柱状图">
+      <div className="daily-chart" aria-label="近七天日度使用柱状图">
         {days.map((day, index) => {
           const value = totals[index];
           return (
@@ -1164,7 +1178,7 @@ function UsageCharts({ days }: { days: DailyUsageRecord[] }) {
           <div className="chart-heading">
             <div>
               <h3>{selected.date} 时段分布</h3>
-              <p>点击上方日期可查看本周任意一天</p>
+              <p>点击上方日期可查看近七天任意一天</p>
             </div>
             <strong>{duration(sumDay(selected).totalSeconds)}</strong>
           </div>
