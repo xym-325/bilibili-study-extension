@@ -1070,16 +1070,19 @@ function Options(): React.JSX.Element {
                 ))}
               </div>
             </section>
-            <section className="settings-card danger-card">
-              <h2>清空全部数据</h2>
+            <section className="settings-card action-stack">
+              <div>
+                <h2>清空全部数据</h2>
+                <p>
+                  连续两次确认后删除全部本地数据；学习时间结束前只允许导出备份。
+                </p>
+              </div>
               <button
-                className="danger-button"
                 disabled={locked}
                 onClick={() => void clearAll().catch(showError)}
               >
-                连续两次确认后清空
+                清空全部数据
               </button>
-              {locked ? <p>学习时间结束前只允许导出备份。</p> : null}
             </section>
           </>
         ) : null}
