@@ -848,7 +848,27 @@ function Options(): React.JSX.Element {
               text="只保存链接、时间戳和进度，不保存视频内容。"
             />
             <section className="settings-card">
-              <h2>时间点与AB片段</h2>
+              <div className="section-title-row help-title">
+                <h2>时间点与AB片段</h2>
+                <details className="help-popover">
+                  <summary aria-label="时间点与AB片段使用指南">?</summary>
+                  <div>
+                    <strong>使用指南</strong>
+                    <p>
+                      先在功能设置中开启“AB循环”和“学习沉淀”，再打开普通视频或B站课堂页面。右侧“视频工具”会出现“设
+                      A”“设 B”“记时间点”“存片段”。
+                    </p>
+                    <p>
+                      看到重点位置时点“记时间点”；需要反复看一段内容时，先在起点点“设
+                      A”，到终点点“设 B”，视频会在 A 到 B
+                      之间循环，确认后点“存片段”保存。
+                    </p>
+                    <p>
+                      保存后可在这里按名称、视频、UP主或备注搜索，也可以标为“重点、疑问、待复习”。点击“跳转”会回到对应时间；AB片段会带上起止时间并恢复循环。
+                    </p>
+                  </div>
+                </details>
+              </div>
               <div className="toolbar">
                 <input
                   type="search"

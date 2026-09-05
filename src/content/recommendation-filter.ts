@@ -20,6 +20,10 @@ const ownUi = (node: Element) =>
   Boolean(node.closest("#bse-player-toolbar,.bse-reveal-comment"));
 const text = (el: Element | null) =>
   (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+const wrapperLike = (el: HTMLElement) =>
+  /(?:card|feed|floor|recommend|recommended|rcmd|video|live|wrap)/i.test(
+    `${el.className} ${el.id}`,
+  );
 export function extractEvidence(card: HTMLElement): CardEvidence {
   const titleNode = card.querySelector<HTMLElement>(TITLE_SELECTOR);
   const titleLink = titleNode?.matches("a[href]")
@@ -86,9 +90,14 @@ export class RecommendationFilter {
   private pending = new Set<HTMLElement>();
   private states = new Map<
     HTMLElement,
-    { fingerprint: string; record: FilterRecord | null }
+    {
+      fingerprint: string;
+      record: FilterRecord | null;
+      placeholder?: Comment;
+    }
   >();
   private timer: number | undefined;
+  private reflowTimer: number | undefined;
   private observer: MutationObserver;
   private pageUrl = location.href;
   public evaluations = 0;
@@ -122,20 +131,31 @@ export class RecommendationFilter {
     });
   }
   private wholeCard(el: HTMLElement): HTMLElement {
-    // A feed-card can be a wrapper for one card. Never hide a wrapper containing multiple cards.
+    // Hide the outer layout item when B站 wraps one card in a feed/grid shell.
+    // Hiding only the inner card leaves an empty grid slot on the home feed.
     let card = el;
-    for (
-      let parent = card.parentElement?.closest<HTMLElement>(CARD_SELECTOR);
-      parent;
-      parent = parent.parentElement?.closest<HTMLElement>(CARD_SELECTOR)
-    ) {
+    while (card.parentElement && card.parentElement !== document.body) {
+      const parent = card.parentElement;
       const leaves = [...parent.querySelectorAll(CARD_SELECTOR)].filter(
         (n) => !n.querySelector(CARD_SELECTOR),
       );
       if (leaves.length > 1) break;
-      card = parent;
+      if (
+        parent.matches(CARD_SELECTOR) ||
+        (parent.children.length === 1 && wrapperLike(parent))
+      )
+        card = parent;
+      else break;
     }
     return card;
+  }
+  private requestReflow() {
+    if (this.reflowTimer !== undefined) return;
+    this.reflowTimer = window.setTimeout(() => {
+      this.reflowTimer = undefined;
+      window.dispatchEvent(new Event("resize"));
+      window.dispatchEvent(new Event("scroll"));
+    }, 40);
   }
   private collectClosest(el: Element) {
     const card = el.closest<HTMLElement>(CARD_SELECTOR);
@@ -155,11 +175,26 @@ export class RecommendationFilter {
     }
   }
   private prune() {
-    for (const card of this.states.keys())
-      if (!card.isConnected) {
+    for (const [card, state] of this.states)
+      if (!card.isConnected && !state.placeholder?.isConnected) {
         card.classList.remove("bse-card-hidden");
         this.states.delete(card);
       }
+  }
+  private hideCard(card: HTMLElement, state: { placeholder?: Comment } = {}) {
+    card.classList.add("bse-card-hidden");
+    if (state.placeholder?.isConnected) return state.placeholder;
+    const placeholder = document.createComment("bse-hidden-card");
+    card.before(placeholder);
+    card.remove();
+    return placeholder;
+  }
+  private restoreCard(card: HTMLElement, state?: { placeholder?: Comment }) {
+    card.classList.remove("bse-card-hidden");
+    if (state?.placeholder?.isConnected) {
+      state.placeholder.after(card);
+      state.placeholder.remove();
+    }
   }
   private schedule() {
     if (this.timer !== undefined || !this.pending.size) return;
@@ -171,13 +206,18 @@ export class RecommendationFilter {
         if (!card.isConnected) continue;
         const evidence = extractEvidence(card);
         const fingerprint = JSON.stringify(evidence);
-        if (this.states.get(card)?.fingerprint !== fingerprint) {
+        const previous = this.states.get(card);
+        if (previous?.fingerprint !== fingerprint) {
           this.evaluations++;
           const record = this.enabled
             ? classifyCard(evidence, this.options)
             : null;
-          card.classList.toggle("bse-card-hidden", Boolean(record));
-          this.states.set(card, { fingerprint, record });
+          const wasHidden = Boolean(previous?.record);
+          const placeholder = record
+            ? this.hideCard(card, previous)
+            : (this.restoreCard(card, previous), undefined);
+          if (wasHidden !== Boolean(record)) this.requestReflow();
+          this.states.set(card, { fingerprint, record, placeholder });
         }
         if (performance.now() - start >= 8) break;
       }
@@ -189,11 +229,13 @@ export class RecommendationFilter {
     this.enabled = settings.features["interface-optimization"] && supported;
     this.pageUrl = location.href;
     if (this.timer !== undefined) window.clearTimeout(this.timer);
+    if (this.reflowTimer !== undefined) window.clearTimeout(this.reflowTimer);
     this.timer = undefined;
+    this.reflowTimer = undefined;
     this.pending.clear();
-    for (const card of this.states.keys())
-      card.classList.remove("bse-card-hidden");
+    for (const [card, state] of this.states) this.restoreCard(card, state);
     this.states.clear();
+    this.requestReflow();
     if (this.enabled) {
       this.collect(document);
       this.schedule();
@@ -206,8 +248,9 @@ export class RecommendationFilter {
     };
     for (const [card, state] of this.states)
       if (state.record?.key === key) {
-        card.classList.remove("bse-card-hidden");
+        this.restoreCard(card, state);
         state.record = null;
+        state.placeholder = undefined;
       }
   }
   report(): FilterReport {

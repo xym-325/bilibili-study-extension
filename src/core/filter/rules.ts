@@ -8,6 +8,8 @@ export const CONTENT_TYPES = [
   "电视剧",
   "综艺",
   "漫画",
+  "课堂",
+  "赛事",
 ] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 export type FilterReason = "广告" | "直播" | "内容类型" | "营销" | "关键词";

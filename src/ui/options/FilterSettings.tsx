@@ -321,7 +321,7 @@ export function FilterSettings({
               ))}
             </div>
             <p className="muted">
-              这是目前已确认的七类，不代表B站未来不会新增角标。未识别的角标保留，不猜测分类。
+              这是目前已确认的九类，不代表B站未来不会新增角标。未识别的角标保留，不猜测分类。
             </p>
           </>
         )}
@@ -363,7 +363,7 @@ export function FilterSettings({
                 rows={8}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="例如：犯罪&#10;案件"
+                placeholder="例如：娱乐资讯&#10;事件"
               />
             </label>
             <label className="field">

@@ -56,6 +56,8 @@ for (const type of CONTENT_TYPES) {
     null,
   );
 }
+assert.ok(CONTENT_TYPES.includes("课堂"), "内容类型应包含课堂");
+assert.ok(CONTENT_TYPES.includes("赛事"), "内容类型应包含赛事");
 assert.equal(classifyCard({ ...base, ad: true }, options)?.reason, "广告");
 assert.equal(classifyCard({ ...base, live: true }, options)?.reason, "直播");
 assert.equal(
@@ -176,5 +178,5 @@ applyUsageTick(usage, {
 });
 assert.equal(JSON.stringify(usage), before);
 console.log(
-  "Filter/session/usage tests passed: 保留赞助、七类角标、营销反例、关键词、例外、客观时间与跨窗口去重/跨时段分桶。",
+  "Filter/session/usage tests passed: 保留赞助、九类角标、营销反例、关键词、例外、客观时间与跨窗口去重/跨时段分桶。",
 );
